@@ -1,16 +1,18 @@
 from fastapi import FastAPI, HTTPException, Depends, Security, BackgroundTasks
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict
 from datetime import datetime, time, timedelta
-from motor.motor_asyncio import AsyncIOMotorClient
-from bson import ObjectId
+from pymongo import MongoClient, ASCENDING
+from pymongo.server_api import ServerApi
 import os
 from dotenv import load_dotenv
 import uvicorn
 import pytz
 from enum import Enum
+from bson import ObjectId
+from passlib.context import CryptContext
 
 # Load environment variables
 load_dotenv()
@@ -29,12 +31,16 @@ app.add_middleware(
 
 # Database Configuration
 MONGODB_URL = os.getenv("MONGODB_URL")
-client = AsyncIOMotorClient(MONGODB_URL)
+client = MongoClient(MONGODB_URL, server_api=ServerApi('1'))
 db = client.tiffintreats
 
+# Security Configuration
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+api_key_header = APIKeyHeader(name="X-API-Key")
+
 # Admin Configuration
-ADMIN_IDS = os.getenv("ADMIN_IDS").split(",")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+ADMIN_IDS = os.getenv("ADMIN_IDS", "").split(",")
+ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
 
 # Timezone Configuration
 IST = pytz.timezone('Asia/Kolkata')
@@ -57,6 +63,7 @@ class TiffinStatus(str, Enum):
 class UserBase(BaseModel):
     user_id: str
     name: str
+    email: EmailStr
     address: str
 
 class UserCreate(UserBase):
@@ -67,7 +74,7 @@ class User(UserBase):
     created_at: datetime = Field(default_factory=lambda: datetime.now(IST))
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class TiffinBase(BaseModel):
     date: str
@@ -78,7 +85,7 @@ class TiffinBase(BaseModel):
     delivery_time: str
     status: TiffinStatus = TiffinStatus.SCHEDULED
     menu_items: List[str]
-    
+
 class TiffinCreate(TiffinBase):
     assigned_users: List[str]
 
@@ -86,6 +93,9 @@ class Tiffin(TiffinBase):
     id: str = Field(alias="_id")
     created_at: datetime = Field(default_factory=lambda: datetime.now(IST))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(IST))
+
+    class Config:
+        from_attributes = True
 
 class Notice(BaseModel):
     title: str
@@ -121,6 +131,24 @@ class Invoice(BaseModel):
     paid: bool = False
     generated_at: datetime = Field(default_factory=lambda: datetime.now(IST))
 
+# Authentication Functions
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
+async def verify_admin(api_key: str = Depends(api_key_header)):
+    if api_key != ADMIN_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return True
+
+async def verify_user(api_key: str = Depends(api_key_header)):
+    user = db.users.find_one({"api_key": api_key})
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return user["user_id"]
+
 # Utility Functions
 def parse_time(time_str: str) -> datetime:
     return datetime.strptime(time_str, "%H:%M").replace(tzinfo=IST)
@@ -130,40 +158,38 @@ async def is_cancellation_allowed(tiffin: dict) -> bool:
     cancellation_time = parse_time(tiffin["cancellation_time"])
     return current_time < cancellation_time
 
-# Authentication Middleware
-async def verify_admin(
-    user_id: str = Depends(APIKeyHeader(name="user-id")),
-    password: str = Depends(APIKeyHeader(name="password"))
-):
-    if user_id not in ADMIN_IDS or password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return user_id
-
-async def verify_user(
-    user_id: str = Depends(APIKeyHeader(name="user-id")),
-    password: str = Depends(APIKeyHeader(name="password"))
-):
-    user = await db.users.find_one({"user_id": user_id})
-    if not user or user["password"] != password:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return user_id
+async def calculate_monthly_revenue():
+    start_date = datetime.now(IST).replace(day=1).strftime("%Y-%m-%d")
+    end_date = datetime.now(IST).strftime("%Y-%m-%d")
+    
+    tiffins = list(db.tiffins.find({
+        "date": {"$gte": start_date, "$lte": end_date},
+        "status": {"$ne": TiffinStatus.CANCELLED}
+    }))
+    
+    return sum(t["price"] for t in tiffins)
 
 # Health Check Endpoint
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "timestamp": datetime.now(IST)}
+    try:
+        client.admin.command('ping')
+        return {"status": "healthy", "timestamp": datetime.now(IST)}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 # User Endpoints
 @app.post("/auth/login")
 async def login(user_id: str, password: str):
-    if user_id in ADMIN_IDS and password == ADMIN_PASSWORD:
-        return {"status": "success", "role": "admin"}
-    
-    user = await db.users.find_one({"user_id": user_id})
-    if not user or user["password"] != password:
+    user = db.users.find_one({"user_id": user_id})
+    if not user or not verify_password(password, user["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    return {"status": "success", "role": "user"}
+    return {
+        "status": "success",
+        "api_key": user["api_key"],
+        "role": "admin" if user_id in ADMIN_IDS else "user"
+    }
 
 @app.get("/user/tiffins", response_model=List[Tiffin])
 async def get_user_tiffins(
@@ -174,7 +200,9 @@ async def get_user_tiffins(
     if date:
         query["date"] = date
     
-    tiffins = await db.tiffins.find(query).to_list(None)
+    tiffins = list(db.tiffins.find(query))
+    for tiffin in tiffins:
+        tiffin["_id"] = str(tiffin["_id"])
     return tiffins
 
 @app.post("/user/cancel-tiffin")
@@ -182,7 +210,7 @@ async def cancel_tiffin(
     tiffin_id: str,
     user_id: str = Depends(verify_user)
 ):
-    tiffin = await db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
+    tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
     if not tiffin:
         raise HTTPException(status_code=404, detail="Tiffin not found")
     
@@ -192,7 +220,7 @@ async def cancel_tiffin(
     if not await is_cancellation_allowed(tiffin):
         raise HTTPException(status_code=400, detail="Cancellation time has passed")
     
-    await db.tiffins.update_one(
+    db.tiffins.update_one(
         {"_id": ObjectId(tiffin_id)},
         {
             "$set": {"status": TiffinStatus.CANCELLED},
@@ -201,71 +229,6 @@ async def cancel_tiffin(
     )
     
     return {"status": "success"}
-
-# Admin Endpoints
-@app.post("/admin/users", dependencies=[Depends(verify_admin)])
-async def create_user(user: UserCreate):
-    existing_user = await db.users.find_one({"user_id": user.user_id})
-    if existing_user:
-        raise HTTPException(status_code=400, detail="User ID already exists")
-    
-    user_dict = user.dict()
-    await db.users.insert_one(user_dict)
-    return {"status": "success", "user_id": user.user_id}
-
-@app.post("/admin/tiffins", dependencies=[Depends(verify_admin)])
-async def create_tiffin(tiffin: TiffinCreate):
-    tiffin_dict = tiffin.dict()
-    tiffin_dict["created_at"] = datetime.now(IST)
-    result = await db.tiffins.insert_one(tiffin_dict)
-    return {"status": "success", "tiffin_id": str(result.inserted_id)}
-
-@app.put("/admin/tiffins/{tiffin_id}/status", dependencies=[Depends(verify_admin)])
-async def update_tiffin_status(tiffin_id: str, status: TiffinStatus):
-    result = await db.tiffins.update_one(
-        {"_id": ObjectId(tiffin_id)},
-        {
-            "$set": {
-                "status": status,
-                "updated_at": datetime.now(IST)
-            }
-        }
-    )
-    if result.modified_count == 0:
-        raise HTTPException(status_code=404, detail="Tiffin not found")
-    return {"status": "success"}
-
-@app.post("/admin/notices", dependencies=[Depends(verify_admin)])
-async def create_notice(notice: Notice):
-    result = await db.notices.insert_one(notice.dict())
-    return {"status": "success", "notice_id": str(result.inserted_id)}
-
-@app.post("/admin/polls", dependencies=[Depends(verify_admin)])
-async def create_poll(poll: Poll):
-    result = await db.polls.insert_one(poll.dict())
-    return {"status": "success", "poll_id": str(result.inserted_id)}
-
-# Additional Models
-class TiffinHistory(BaseModel):
-    user_id: str
-    tiffin_id: str
-    original_status: TiffinStatus
-    new_status: TiffinStatus
-    changed_at: datetime = Field(default_factory=lambda: datetime.now(IST))
-
-class UserStats(BaseModel):
-    total_tiffins: int
-    cancelled_tiffins: int
-    total_spent: float
-    active_since: datetime
-
-class DashboardStats(BaseModel):
-    total_users: int
-    active_tiffins: int
-    today_deliveries: int
-    monthly_revenue: float
-
-# User Endpoints (continued)
 
 @app.get("/user/history")
 async def get_user_history(
@@ -279,12 +242,16 @@ async def get_user_history(
     if end_date:
         query["date"] = {"$lte": end_date}
     
-    history = await db.tiffins.find(query).sort("date", -1).to_list(None)
+    history = list(db.tiffins.find(query).sort("date", -1))
+    for item in history:
+        item["_id"] = str(item["_id"])
     return history
 
 @app.get("/user/invoices")
 async def get_user_invoices(user_id: str = Depends(verify_user)):
-    invoices = await db.invoices.find({"user_id": user_id}).to_list(None)
+    invoices = list(db.invoices.find({"user_id": user_id}))
+    for invoice in invoices:
+        invoice["_id"] = str(invoice["_id"])
     return invoices
 
 @app.post("/user/request-tiffin")
@@ -295,7 +262,7 @@ async def request_special_tiffin(
     request_dict = request.dict()
     request_dict["status"] = "pending"
     request_dict["created_at"] = datetime.now(IST)
-    result = await db.tiffin_requests.insert_one(request_dict)
+    result = db.tiffin_requests.insert_one(request_dict)
     return {"status": "success", "request_id": str(result.inserted_id)}
 
 @app.put("/user/profile")
@@ -303,13 +270,13 @@ async def update_user_profile(
     updates: Dict,
     user_id: str = Depends(verify_user)
 ):
-    allowed_updates = ["name", "address"]
+    allowed_updates = ["name", "address", "email"]
     update_data = {k: v for k, v in updates.items() if k in allowed_updates}
     
     if not update_data:
         raise HTTPException(status_code=400, detail="No valid updates provided")
     
-    result = await db.users.update_one(
+    db.users.update_one(
         {"user_id": user_id},
         {"$set": update_data}
     )
@@ -321,8 +288,7 @@ async def vote_poll(
     option_index: int,
     user_id: str = Depends(verify_user)
 ):
-    # Check if user already voted
-    existing_vote = await db.poll_votes.find_one({
+    existing_vote = db.poll_votes.find_one({
         "poll_id": ObjectId(poll_id),
         "user_id": user_id
     })
@@ -330,69 +296,101 @@ async def vote_poll(
     if existing_vote:
         raise HTTPException(status_code=400, detail="Already voted")
     
-    # Record vote
-    await db.poll_votes.insert_one({
+    db.poll_votes.insert_one({
         "poll_id": ObjectId(poll_id),
         "user_id": user_id,
         "option_index": option_index,
         "voted_at": datetime.now(IST)
     })
     
-    # Update poll option count
-    await db.polls.update_one(
+    db.polls.update_one(
         {"_id": ObjectId(poll_id)},
         {"$inc": {f"options.{option_index}.votes": 1}}
     )
     
     return {"status": "success"}
 
-# Admin Endpoints (continued)
+# Admin Endpoints
+@app.post("/admin/users", dependencies=[Depends(verify_admin)])
+async def create_user(user: UserCreate):
+    existing_user = db.users.find_one({"user_id": user.user_id})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User ID already exists")
+    
+    user_dict = user.dict()
+    user_dict["password"] = get_password_hash(user_dict["password"])
+    user_dict["api_key"] = os.urandom(24).hex()
+    
+    db.users.insert_one(user_dict)
+    return {"status": "success", "user_id": user.user_id}
+
+@app.post("/admin/tiffins", dependencies=[Depends(verify_admin)])
+async def create_tiffin(tiffin: TiffinCreate):
+    tiffin_dict = tiffin.dict()
+    tiffin_dict["created_at"] = datetime.now(IST)
+    result = db.tiffins.insert_one(tiffin_dict)
+    return {"status": "success", "tiffin_id": str(result.inserted_id)}
+
+@app.put("/admin/tiffins/{tiffin_id}/status", dependencies=[Depends(verify_admin)])
+async def update_tiffin_status(tiffin_id: str, status: TiffinStatus):
+    result = db.tiffins.update_one(
+        {"_id": ObjectId(tiffin_id)},
+        {
+            "$set": {
+                "status": status,
+                "updated_at": datetime.now(IST)
+            }
+        }
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Tiffin not found")
+    return {"status": "success"}
 
 @app.get("/admin/dashboard", dependencies=[Depends(verify_admin)])
 async def get_dashboard_stats():
     today = datetime.now(IST).strftime("%Y-%m-%d")
     
-    stats = DashboardStats(
-        total_users=await db.users.count_documents({"active": True}),
-        active_tiffins=await db.tiffins.count_documents({
+    stats = {
+        "total_users": db.users.count_documents({"active": True}),
+        "active_tiffins": db.tiffins.count_documents({
             "date": today,
             "status": {"$nin": [TiffinStatus.DELIVERED, TiffinStatus.CANCELLED]}
         }),
-        today_deliveries=await db.tiffins.count_documents({
+        "today_deliveries": db.tiffins.count_documents({
             "date": today,
             "status": TiffinStatus.DELIVERED
         }),
-        monthly_revenue=await calculate_monthly_revenue()
-    )
+        "monthly_revenue": await calculate_monthly_revenue()
+    }
     return stats
 
 @app.get("/admin/user/{user_id}/stats", dependencies=[Depends(verify_admin)])
 async def get_user_stats(user_id: str):
-    user = await db.users.find_one({"user_id": user_id})
+    user = db.users.find_one({"user_id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    tiffins = await db.tiffins.find({"assigned_users": user_id}).to_list(None)
+    tiffins = list(db.tiffins.find({"assigned_users": user_id}))
     
-    stats = UserStats(
-        total_tiffins=len(tiffins),
-        cancelled_tiffins=sum(1 for t in tiffins if t["status"] == TiffinStatus.CANCELLED),
-        total_spent=sum(t["price"] for t in tiffins if t["status"] != TiffinStatus.CANCELLED),
-        active_since=user["created_at"]
-    )
+    stats = {
+        "total_tiffins": len(tiffins),
+        "cancelled_tiffins": sum(1 for t in tiffins if t["status"] == TiffinStatus.CANCELLED),
+        "total_spent": sum(t["price"] for t in tiffins if t["status"] != TiffinStatus.CANCELLED),
+        "active_since": user["created_at"]
+    }
     return stats
 
 @app.post("/admin/generate-invoices", dependencies=[Depends(verify_admin)])
 async def generate_invoices(start_date: str, end_date: str):
-    users = await db.users.find({"active": True}).to_list(None)
+    users = list(db.users.find({"active": True}))
     generated_invoices = []
     
     for user in users:
-        tiffins = await db.tiffins.find({
+        tiffins = list(db.tiffins.find({
             "assigned_users": user["user_id"],
             "date": {"$gte": start_date, "$lte": end_date},
             "status": {"$ne": TiffinStatus.CANCELLED}
-        }).to_list(None)
+        }))
         
         if tiffins:
             invoice = Invoice(
@@ -402,7 +400,7 @@ async def generate_invoices(start_date: str, end_date: str):
                 tiffins=[str(t["_id"]) for t in tiffins],
                 total_amount=sum(t["price"] for t in tiffins)
             )
-            result = await db.invoices.insert_one(invoice.dict())
+            result = db.invoices.insert_one(invoice.dict())
             generated_invoices.append(str(result.inserted_id))
     
     return {"status": "success", "generated_invoices": len(generated_invoices)}
@@ -422,35 +420,35 @@ async def create_batch_tiffins(
         tiffin.date = date
         tiffin.time = time
         
-        result = await db.tiffins.insert_one(tiffin.dict())
+        tiffin_dict = tiffin.dict()
+        tiffin_dict["created_at"] = datetime.now(IST)
+        result = db.tiffins.insert_one(tiffin_dict)
         created_tiffins.append(str(result.inserted_id))
     
     return {"status": "success", "created_tiffins": created_tiffins}
 
 @app.delete("/admin/tiffins/{tiffin_id}", dependencies=[Depends(verify_admin)])
 async def delete_tiffin(tiffin_id: str):
-    result = await db.tiffins.delete_one({"_id": ObjectId(tiffin_id)})
+    result = db.tiffins.delete_one({"_id": ObjectId(tiffin_id)})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Tiffin not found")
     return {"status": "success"}
 
-# Utility Functions
-async def calculate_monthly_revenue():
-    start_date = datetime.now(IST).replace(day=1).strftime("%Y-%m-%d")
-    end_date = datetime.now(IST).strftime("%Y-%m-%d")
-    
-    tiffins = await db.tiffins.find({
-        "date": {"$gte": start_date, "$lte": end_date},
-        "status": {"$ne": TiffinStatus.CANCELLED}
-    }).to_list(None)
-    
-    return sum(t["price"] for t in tiffins)
+@app.post("/admin/notices", dependencies=[Depends(verify_admin)])
+async def create_notice(notice: Notice):
+    result = db.notices.insert_one(notice.dict())
+    return {"status": "success", "notice_id": str(result.inserted_id)}
+
+@app.post("/admin/polls", dependencies=[Depends(verify_admin)])
+async def create_poll(poll: Poll):
+    result = db.polls.insert_one(poll.dict())
+    return {"status": "success", "poll_id": str(result.inserted_id)}
 
 # Background Tasks
 async def cleanup_old_data():
     thirty_days_ago = datetime.now(IST) - timedelta(days=30)
-    await db.notices.delete_many({"expires_at": {"$lt": thirty_days_ago}})
-    await db.polls.update_many(
+    db.notices.delete_many({"expires_at": {"$lt": thirty_days_ago}})
+    db.polls.update_many(
         {"end_date": {"$lt": thirty_days_ago}},
         {"$set": {"active": False}}
     )
@@ -459,15 +457,23 @@ async def cleanup_old_data():
 @app.on_event("startup")
 async def startup_event():
     # Create indexes
-    await db.users.create_index("user_id", unique=True)
-    await db.tiffins.create_index([("date", 1), ("time", 1)])
-    await db.poll_votes.create_index([("poll_id", 1), ("user_id", 1)], unique=True)
+    db.users.create_index([("user_id", ASCENDING)], unique=True)
+    db.users.create_index([("email", ASCENDING)], unique=True)
+    db.users.create_index([("api_key", ASCENDING)], unique=True)
+    db.tiffins.create_index([("date", ASCENDING), ("time", ASCENDING)])
+    db.poll_votes.create_index(
+        [("poll_id", ASCENDING), ("user_id", ASCENDING)],
+        unique=True
+    )
+    
+    # Schedule background tasks
+    background_tasks = BackgroundTasks()
+    background_tasks.add_task(cleanup_old_data)
 
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=False,
-        workers=4
+        reload=True
     )
