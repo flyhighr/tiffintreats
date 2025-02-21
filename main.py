@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 import requests
 from bson import ObjectId
+import logging
+from logging.handlers import RotatingFileHandler
 
 # Load environment variables
 load_dotenv()
@@ -23,6 +25,17 @@ JWT_SECRET = os.getenv('JWT_SECRET')
 ADMIN_ID = os.getenv('ADMIN_ID')
 ADMIN_PHONE = os.getenv('ADMIN_PHONE')
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD')
+
+# Logging configuration
+if not os.path.exists('logs'):
+    os.mkdir('logs')
+file_handler = RotatingFileHandler('logs/tiffin_treats.log', maxBytes=10240, backupCount=10)
+file_handler.setFormatter(logging.Formatter(
+    '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'))
+file_handler.setLevel(logging.INFO)
+app.logger.addHandler(file_handler)
+app.logger.setLevel(logging.INFO)
+app.logger.info('Tiffin Treats startup')
 
 # MongoDB connection
 client = MongoClient(MONGO_URI)
@@ -331,7 +344,7 @@ def health_check():
 # Keep-alive scheduler
 def ping_server():
     try:
-        requests.get('https://your-render-url.onrender.com/health')
+        requests.get('https://tiffintreats-20mb.onrender.com/health')
     except:
         pass
 
@@ -340,4 +353,4 @@ scheduler.add_job(ping_server, 'interval', minutes=10)
 scheduler.start()
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False)
