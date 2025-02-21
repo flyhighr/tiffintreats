@@ -149,8 +149,12 @@ def login():
         if not data or 'phone' not in data or 'password' not in data:
             return jsonify({'error': 'Missing phone or password'}), 400
             
-        phone = str(data['phone'])
-        password = str(data['password'])
+        # Convert phone to string and ensure password is string
+        phone = str(data['phone']).strip()
+        password = str(data['password']).strip()
+        
+        if not phone or not password:
+            return jsonify({'error': 'Phone and password cannot be empty'}), 400
         
         app.logger.info(f"Login attempt for phone: {phone}")
         
@@ -162,9 +166,19 @@ def login():
             return jsonify({'error': 'Invalid credentials'}), 401
 
         # Debug logging
-        app.logger.debug(f"Attempting password verification for user: {phone}")
+        app.logger.debug(f"Found user: {user.get('phone')}")
         
-        if bcrypt.checkpw(password.encode('utf-8'), user['password']):
+        # Ensure password is properly encoded before checking
+        try:
+            is_valid = bcrypt.checkpw(
+                password.encode('utf-8'),
+                user['password']
+            )
+        except Exception as e:
+            app.logger.error(f"Password verification error: {str(e)}")
+            return jsonify({'error': 'Password verification failed'}), 500
+
+        if is_valid:
             token = jwt.encode({
                 'user_id': str(user['_id']),
                 'role': user['role'],
