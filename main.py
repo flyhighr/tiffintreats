@@ -80,7 +80,7 @@ def health_check():
 def ping_server():
     while True:
         try:
-            requests.get('https://your-render-url/health')
+            requests.get('https://tiffintreats-20mb.onrender.com/health')
             time.sleep(600)  # 10 minutes
         except:
             pass
