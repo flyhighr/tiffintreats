@@ -1,0 +1,1166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TiffinTreats - Home Food Delivery</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-color: #ff6b6b;
+            --primary-dark: #ff4757;
+            --secondary-color: #4ecdc4;
+            --accent-color: #ffd93d;
+            --background-color: #f7f7f7;
+            --text-color: #2d3436;
+            --border-color: #dfe6e9;
+            --success-color: #00b894;
+            --error-color: #d63031;
+            --gray-light: #f1f2f6;
+            --gray-medium: #b2bec3;
+            --shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            --transition: all 0.3s ease;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Poppins', sans-serif;
+        }
+
+        body {
+            background-color: var(--background-color);
+            color: var(--text-color);
+            line-height: 1.6;
+        }
+
+        /* Loading Spinner */
+        .spinner-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid var(--gray-light);
+            border-radius: 50%;
+            border-top-color: var(--primary-color);
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+
+        .toast {
+            padding: 1rem;
+            margin-bottom: 0.5rem;
+            border-radius: 5px;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 300px;
+            animation: slideIn 0.3s ease;
+        }
+
+        .toast.success {
+            background-color: var(--success-color);
+        }
+
+        .toast.error {
+            background-color: var(--error-color);
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+        }
+
+        /* Authentication */
+        .auth-container {
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            padding: 1rem;
+        }
+
+        .auth-box {
+            background: white;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: var(--shadow);
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .auth-box h2 {
+            text-align: center;
+            color: var(--primary-color);
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .form-group {
+            position: relative;
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group i {
+            position: absolute;
+            left: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--gray-medium);
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 0.8rem 1rem 0.8rem 2.5rem;
+            border: 1px solid var(--border-color);
+            border-radius: 5px;
+            font-size: 1rem;
+            transition: var(--transition);
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 2px rgba(255, 107, 107, 0.1);
+        }
+
+        .btn {
+            width: 100%;
+            padding: 0.8rem;
+            border: none;
+            border-radius: 5px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: var(--transition);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--primary-dark);
+        }
+
+        /* Navigation */
+        .navbar {
+            background-color: white;
+            padding: 1rem 2rem;
+            box-shadow: var(--shadow);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .nav-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .nav-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--primary-color);
+            text-decoration: none;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 1.5rem;
+            align-items: center;
+        }
+
+        .nav-link {
+            text-decoration: none;
+            color: var(--text-color);
+            padding: 0.5rem;
+            border-radius: 5px;
+            transition: var(--transition);
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .nav-link:hover,
+        .nav-link.active {
+            color: var(--primary-color);
+            background-color: var(--gray-light);
+        }
+
+        .mobile-menu-btn {
+            display: none;
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            color: var(--text-color);
+            cursor: pointer;
+        }
+
+        /* Content Area */
+        .content-area {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+        }
+
+        .page {
+            background: white;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: var(--shadow);
+        }
+
+        /* Cards */
+        .card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            margin-bottom: 1rem;
+            transition: var(--transition);
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Grid Layout */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .mobile-menu-btn {
+                display: block;
+            }
+
+            .nav-links {
+                display: none;
+                position: absolute;
+                top: 100%;
+                left: 0;
+                right: 0;
+                background: white;
+                flex-direction: column;
+                padding: 1rem;
+                box-shadow: var(--shadow);
+            }
+
+            .nav-links.active {
+                display: flex;
+            }
+
+            .content-area {
+                margin: 1rem auto;
+            }
+
+            .page {
+                padding: 1rem;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Status Indicators */
+        .status {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 3px;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+
+        .status-preparing { background-color: var(--accent-color); }
+        .status-ready { background-color: var(--success-color); color: white; }
+        .status-cancelled { background-color: var(--error-color); color: white; }
+
+        /* Forms */
+        .form-section {
+            margin-bottom: 2rem;
+        }
+
+        .form-section h3 {
+            margin-bottom: 1rem;
+            color: var(--primary-color);
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+        }
+
+        /* Utilities */
+        .hidden {
+            display: none !important;
+        }
+
+        .text-center { text-align: center; }
+        .mt-1 { margin-top: 1rem; }
+        .mb-1 { margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    <!-- App Container -->
+    <div id="app">
+        <!-- Loading Spinner -->
+        <div id="spinner" class="spinner-overlay hidden">
+            <div class="spinner"></div>
+        </div>
+
+        <!-- Toast Container -->
+        <div id="toast-container" class="toast-container"></div>
+
+        <!-- Authentication Section -->
+        <div id="auth-section" class="auth-container">
+            <div class="auth-box">
+                <h2>
+                    <i class="fas fa-utensils"></i>
+                    TiffinTreats
+                </h2>
+                </form>
+                <form id="login-form">
+                    <div class="form-group">
+                        <i class="fas fa-phone"></i>
+                        <input type="tel" id="phone" class="form-control" 
+                               placeholder="Phone Number" required>
+                    </div>
+                    <div class="form-group">
+                        <i class="fas fa-lock"></i>
+                        <input type="password" id="password" class="form-control" 
+                               placeholder="Password" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-sign-in-alt"></i> Login
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Main Application Section -->
+        <div id="main-section" class="hidden">
+            <!-- Navigation -->
+            <nav class="navbar">
+                <div class="nav-container">
+                    <a href="#" class="nav-brand">
+                        <i class="fas fa-utensils"></i>
+                        TiffinTreats
+                    </a>
+                    <button class="mobile-menu-btn">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                    <div class="nav-links">
+                        <a href="#" class="nav-link active" data-page="home">
+                            <i class="fas fa-home"></i> Home
+                        </a>
+                        <a href="#" class="nav-link" data-page="history">
+                            <i class="fas fa-history"></i> History
+                        </a>
+                        <a href="#" class="nav-link" data-page="invoices">
+                            <i class="fas fa-file-invoice"></i> Invoices
+                        </a>
+                        <a href="#" class="nav-link" data-page="notices">
+                            <i class="fas fa-bell"></i> Notices
+                        </a>
+                        <a href="#" class="nav-link admin-only hidden" data-page="admin">
+                            <i class="fas fa-user-shield"></i> Admin
+                        </a>
+                        <a href="#" class="nav-link" id="logout-btn">
+                            <i class="fas fa-sign-out-alt"></i> Logout
+                        </a>
+                    </div>
+                </div>
+            </nav>
+
+            <!-- Content Pages -->
+            <div class="content-area">
+                <!-- Home Page -->
+                <div id="home-page" class="page">
+                    <div class="grid">
+                        <!-- Today's Tiffins -->
+                        <section class="card">
+                            <h3><i class="fas fa-utensils"></i> Today's Tiffins</h3>
+                            <div id="tiffin-container"></div>
+                        </section>
+
+                        <!-- Active Polls -->
+                        <section class="card">
+                            <h3><i class="fas fa-poll"></i> Active Polls</h3>
+                            <div id="polls-container"></div>
+                        </section>
+
+                        <!-- Latest Notices -->
+                        <section class="card">
+                            <h3><i class="fas fa-bell"></i> Latest Notices</h3>
+                            <div id="notices-container"></div>
+                        </section>
+
+                        <!-- Special Request -->
+                        <section class="card">
+                            <h3><i class="fas fa-comment-alt"></i> Special Request</h3>
+                            <form id="special-request-form">
+                                <div class="form-group">
+                                    <textarea class="form-control" name="description" 
+                                              placeholder="Describe your request" required></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <input type="date" class="form-control" name="date" required>
+                                </div>
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-paper-plane"></i> Submit Request
+                                </button>
+                            </form>
+                        </section>
+                    </div>
+                </div>
+
+<script>
+// Configuration
+const config = {
+    API_URL: 'https://tiffintreats-20mb.onrender.com',
+    TOKEN_KEY: 'tiffin_treats_token',
+    REFRESH_INTERVAL: 300000 // 5 minutes
+};
+
+// Utility Class
+class Utils {
+    static showSpinner() {
+        document.getElementById('spinner').classList.remove('hidden');
+    }
+
+    static hideSpinner() {
+        document.getElementById('spinner').classList.add('hidden');
+    }
+
+    static showToast(message, type = 'success') {
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        toast.innerHTML = `
+            <i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i>
+            <span>${message}</span>
+        `;
+        
+        const container = document.getElementById('toast-container');
+        container.appendChild(toast);
+
+        setTimeout(() => {
+            toast.remove();
+        }, 3000);
+    }
+
+    static formatDate(dateString) {
+        return new Date(dateString).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
+    }
+
+    static formatDateTime(dateString) {
+        return new Date(dateString).toLocaleString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    }
+
+    static formatCurrency(amount) {
+        return new Intl.NumberFormat('en-IN', {
+            style: 'currency',
+            currency: 'INR'
+        }).format(amount);
+    }
+}
+
+// Auth Class
+class Auth {
+    static token = localStorage.getItem(config.TOKEN_KEY);
+    static role = null;
+
+    static async login(phone, password) {
+        try {
+            Utils.showSpinner();
+            const response = await fetch(`${config.API_URL}/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    phone: phone.toString(), // Ensure phone is sent as string
+                    password: password
+                })
+            });
+    
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Login failed');
+            }
+    
+            const data = await response.json();
+            this.token = data.token;
+            this.role = data.role;
+            localStorage.setItem(config.TOKEN_KEY, data.token);
+            return true;
+        } catch (error) {
+            console.error('Login error:', error);
+            Utils.showToast(error.message, 'error');
+            return false;
+        } finally {
+            Utils.hideSpinner();
+        }
+    }
+
+    static logout() {
+        this.token = null;
+        this.role = null;
+        localStorage.removeItem(config.TOKEN_KEY);
+        window.location.reload();
+    }
+
+    static isAuthenticated() {
+        return !!this.token;
+    }
+
+    static isAdmin() {
+        return this.role === 'admin';
+    }
+}
+// API Class
+class API {
+    static async request(endpoint, options = {}) {
+        if (!Auth.token) {
+            throw new Error('No authentication token');
+        }
+
+        const defaultOptions = {
+            headers: {
+                'Authorization': Auth.token,
+                'Content-Type': 'application/json'
+            }
+        };
+
+        try {
+            Utils.showSpinner();
+            const response = await fetch(
+                `${config.API_URL}${endpoint}`,
+                { ...defaultOptions, ...options }
+            );
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'API request failed');
+            }
+
+            return await response.json();
+        } catch (error) {
+            console.error('API error:', error);
+            Utils.showToast(error.message, 'error');
+            throw error;
+        } finally {
+            Utils.hideSpinner();
+        }
+    }
+
+    // Tiffin APIs
+    static async getTiffins() {
+        return this.request('/tiffins/upcoming');
+    }
+
+    static async createTiffin(tiffinData) {
+        return this.request('/tiffins', {
+            method: 'POST',
+            body: JSON.stringify(tiffinData)
+        });
+    }
+
+    static async updateTiffinStatus(tiffinId, status) {
+        return this.request(`/tiffins/${tiffinId}/status`, {
+            method: 'PUT',
+            body: JSON.stringify({ status })
+        });
+    }
+
+    static async cancelTiffin(tiffinId) {
+        return this.request(`/tiffins/${tiffinId}/cancel`, {
+            method: 'POST'
+        });
+    }
+
+    // User APIs
+    static async getUsers() {
+        return this.request('/users');
+    }
+
+    static async createUser(userData) {
+        return this.request('/users', {
+            method: 'POST',
+            body: JSON.stringify(userData)
+        });
+    }
+
+    static async updateUser(userId, userData) {
+        return this.request(`/users/${userId}`, {
+            method: 'PUT',
+            body: JSON.stringify(userData)
+        });
+    }
+
+    // History APIs
+    static async getHistory() {
+        return this.request('/history');
+    }
+
+    // Invoice APIs
+    static async getInvoices(startDate, endDate) {
+        const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
+        return this.request(`/invoices?${params}`);
+    }
+
+    // Notice APIs
+    static async getNotices() {
+        return this.request('/notices');
+    }
+
+    static async createNotice(noticeData) {
+        return this.request('/notices', {
+            method: 'POST',
+            body: JSON.stringify(noticeData)
+        });
+    }
+
+    // Poll APIs
+    static async getActivePolls() {
+        return this.request('/polls/active');
+    }
+
+    static async createPoll(pollData) {
+        return this.request('/polls', {
+            method: 'POST',
+            body: JSON.stringify(pollData)
+        });
+    }
+
+    static async votePoll(pollId, option) {
+        return this.request(`/polls/${pollId}/vote`, {
+            method: 'POST',
+            body: JSON.stringify({ option })
+        });
+    }
+
+    // Special Request APIs
+    static async createRequest(requestData) {
+        return this.request('/requests', {
+            method: 'POST',
+            body: JSON.stringify(requestData)
+        });
+    }
+
+    static async getRequests() {
+        return this.request('/requests');
+    }
+}
+
+// UI Handler Class
+class UI {
+    static init() {
+        this.bindElements();
+        this.bindEvents();
+        this.checkAuth();
+        this.setupAutoRefresh();
+    }
+
+    static bindElements() {
+        this.elements = {
+            authSection: document.getElementById('auth-section'),
+            mainSection: document.getElementById('main-section'),
+            loginForm: document.getElementById('login-form'),
+            navLinks: document.querySelectorAll('.nav-link'),
+            pages: document.querySelectorAll('.page'),
+            logoutBtn: document.getElementById('logout-btn'),
+            mobileMenuBtn: document.querySelector('.mobile-menu-btn'),
+            navLinksContainer: document.querySelector('.nav-links'),
+            
+            // Forms
+            createTiffinForm: document.getElementById('create-tiffin-form'),
+            createUserForm: document.getElementById('create-user-form'),
+            createNoticeForm: document.getElementById('create-notice-form'),
+            createPollForm: document.getElementById('create-poll-form'),
+            specialRequestForm: document.getElementById('special-request-form'),
+            
+            // Containers
+            tiffinContainer: document.getElementById('tiffin-container'),
+            pollsContainer: document.getElementById('polls-container'),
+            noticesContainer: document.getElementById('notices-container'),
+            historyContainer: document.getElementById('history-container'),
+            invoicesContainer: document.getElementById('invoices-container'),
+            usersList: document.getElementById('users-list'),
+            specialRequestsList: document.getElementById('special-requests-list'),
+            
+            // Filter elements
+            invoiceStartDate: document.getElementById('invoice-start-date'),
+            invoiceEndDate: document.getElementById('invoice-end-date'),
+            filterInvoicesBtn: document.getElementById('filter-invoices'),
+            
+            // Poll options
+            addPollOptionBtn: document.getElementById('add-poll-option'),
+            pollOptionsContainer: document.getElementById('poll-options')
+        };
+    }
+
+    static bindEvents() {
+        // Auth events
+        this.elements.loginForm.addEventListener('submit', this.handleLogin.bind(this));
+        this.elements.logoutBtn.addEventListener('click', () => Auth.logout());
+
+        // Navigation events
+        this.elements.navLinks.forEach(link => {
+            link.addEventListener('click', (e) => {
+                if (link.dataset.page) {
+                    e.preventDefault();
+                    this.navigateToPage(link.dataset.page);
+                }
+            });
+        });
+
+        // Mobile menu
+        this.elements.mobileMenuBtn.addEventListener('click', () => {
+            this.elements.navLinksContainer.classList.toggle('active');
+        });
+
+        // Form submissions
+        if (this.elements.createTiffinForm) {
+            this.elements.createTiffinForm.addEventListener('submit', this.handleCreateTiffin.bind(this));
+        }
+        if (this.elements.createUserForm) {
+            this.elements.createUserForm.addEventListener('submit', this.handleCreateUser.bind(this));
+        }
+        if (this.elements.createNoticeForm) {
+            this.elements.createNoticeForm.addEventListener('submit', this.handleCreateNotice.bind(this));
+        }
+        if (this.elements.createPollForm) {
+            this.elements.createPollForm.addEventListener('submit', this.handleCreatePoll.bind(this));
+        }
+        if (this.elements.specialRequestForm) {
+            this.elements.specialRequestForm.addEventListener('submit', this.handleSpecialRequest.bind(this));
+        }
+
+        // Filter events
+        if (this.elements.filterInvoicesBtn) {
+            this.elements.filterInvoicesBtn.addEventListener('click', this.handleFilterInvoices.bind(this));
+        }
+
+        // Poll option addition
+        if (this.elements.addPollOptionBtn) {
+            this.elements.addPollOptionBtn.addEventListener('click', this.addPollOption.bind(this));
+        }
+    }
+
+    static async handleLogin(event) {
+        event.preventDefault();
+        
+        try {
+            const phoneInput = document.getElementById('phone');
+            const passwordInput = document.getElementById('password');
+            
+            const phone = phoneInput.value.trim();
+            const password = passwordInput.value.trim();
+            
+            if (!phone || !password) {
+                Utils.showToast('Please enter both phone and password', 'error');
+                return;
+            }
+
+            Utils.showSpinner();
+            
+            const response = await fetch(`${config.API_URL}/login`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify({
+                    phone: phone,
+                    password: password
+                })
+            });
+
+            const data = await response.json();
+            
+            if (!response.ok) {
+                throw new Error(data.error || 'Login failed');
+            }
+
+            // Store authentication data
+            Auth.token = data.token;
+            Auth.role = data.role;
+            localStorage.setItem(config.TOKEN_KEY, data.token);
+
+            // Clear form
+            phoneInput.value = '';
+            passwordInput.value = '';
+
+            // Update UI
+            Utils.showToast('Login successful');
+            this.checkAuth();
+            
+        } catch (error) {
+            console.error('Login error:', error);
+            Utils.showToast(error.message || 'Login failed', 'error');
+        } finally {
+            Utils.hideSpinner();
+        }
+    }
+    static checkAuth() {
+        if (Auth.isAuthenticated()) {
+            this.elements.authSection.classList.add('hidden');
+            this.elements.mainSection.classList.remove('hidden');
+            
+            // Show/hide admin features
+            document.querySelectorAll('.admin-only').forEach(el => {
+                el.style.display = Auth.isAdmin() ? 'block' : 'none';
+            });
+            
+            this.loadHomePage();
+        } else {
+            this.elements.authSection.classList.remove('hidden');
+            this.elements.mainSection.classList.add('hidden');
+        }
+    }
+
+    static navigateToPage(pageId) {
+        this.elements.pages.forEach(page => page.classList.add('hidden'));
+        document.getElementById(`${pageId}-page`)?.classList.remove('hidden');
+        
+        this.elements.navLinks.forEach(link => {
+            link.classList.toggle('active', link.dataset.page === pageId);
+        });
+
+        // Close mobile menu
+        this.elements.navLinksContainer.classList.remove('active');
+
+        // Load page data
+        switch (pageId) {
+            case 'home': this.loadHomePage(); break;
+            case 'history': this.loadHistory(); break;
+            case 'invoices': this.loadInvoices(); break;
+            case 'notices': this.loadNotices(); break;
+            case 'admin': this.loadAdminDashboard(); break;
+        }
+    }
+
+    static async loadHomePage() {
+        try {
+            const [tiffinsData, pollsData, noticesData] = await Promise.all([
+                API.getTiffins(),
+                API.getActivePolls(),
+                API.getNotices()
+            ]);
+
+            this.renderTiffins(tiffinsData.tiffins);
+            this.renderPolls(pollsData.polls);
+            this.renderNotices(noticesData.notices, this.elements.noticesContainer);
+        } catch (error) {
+            console.error('Error loading home page:', error);
+        }
+    }
+
+    static renderTiffins(tiffins) {
+        this.elements.tiffinContainer.innerHTML = tiffins.map(tiffin => `
+            <div class="card">
+                <h3>${tiffin.name}</h3>
+                <p>${tiffin.description}</p>
+                <p>Price: ${Utils.formatCurrency(tiffin.price)}</p>
+                <p>Time: ${tiffin.time_slot}</p>
+                <p>Date: ${Utils.formatDate(tiffin.date)}</p>
+                <p>Status: <span class="status status-${tiffin.status.toLowerCase()}">${tiffin.status}</span></p>
+                ${new Date(tiffin.cancellation_time) > new Date() ? 
+                    `<button class="btn btn-primary" onclick="UI.handleCancelTiffin('${tiffin._id}')">
+                        <i class="fas fa-times"></i> Cancel
+                    </button>` : 
+                    '<p class="error">Cancellation period ended</p>'}
+            </div>
+        `).join('');
+    }
+
+    static renderPolls(polls) {
+        this.elements.pollsContainer.innerHTML = polls.map(poll => `
+            <div class="card">
+                <h3>${poll.question}</h3>
+                <div class="poll-options">
+                    ${Object.entries(poll.votes).map(([option, votes]) => `
+                        <button class="btn btn-primary mb-1" onclick="UI.handleVote('${poll._id}', '${option}')">
+                            ${option} (${votes.length} votes)
+                        </button>
+                    `).join('')}
+                </div>
+                <p class="mt-1">
+                    ${Utils.formatDate(poll.start_date)} - ${Utils.formatDate(poll.end_date)}
+                </p>
+            </div>
+        `).join('');
+    }
+
+    static renderNotices(notices, container) {
+        container.innerHTML = notices.map(notice => `
+            <div class="card">
+                <h3>${notice.title}</h3>
+                <p>${notice.content}</p>
+                <small>Posted: ${Utils.formatDateTime(notice.created_at)}</small>
+            </div>
+        `).join('');
+    }
+
+    static async loadHistory() {
+        try {
+            const data = await API.getHistory();
+            this.elements.historyContainer.innerHTML = data.history.map(tiffin => `
+                <div class="card">
+                    <h3>${tiffin.name}</h3>
+                    <p>${tiffin.description}</p>
+                    <p>Price: ${Utils.formatCurrency(tiffin.price)}</p>
+                    <p>Date: ${Utils.formatDate(tiffin.date)}</p>
+                    <p>Status: <span class="status status-${tiffin.status.toLowerCase()}">${tiffin.status}</span></p>
+                </div>
+            `).join('');
+        } catch (error) {
+            console.error('Error loading history:', error);
+        }
+    }
+
+    static async loadInvoices() {
+        if (!this.elements.invoiceStartDate.value || !this.elements.invoiceEndDate.value) {
+            const today = new Date();
+            const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+            this.elements.invoiceStartDate.value = firstDay.toISOString().split('T')[0];
+            this.elements.invoiceEndDate.value = today.toISOString().split('T')[0];
+        }
+        await this.handleFilterInvoices();
+    }
+
+    static async handleFilterInvoices() {
+        try {
+            const data = await API.getInvoices(
+                this.elements.invoiceStartDate.value,
+                this.elements.invoiceEndDate.value
+            );
+
+            this.elements.invoicesContainer.innerHTML = `
+                <div class="card">
+                    <h3>Total Amount: ${Utils.formatCurrency(data.total_amount)}</h3>
+                    ${data.tiffins.map(tiffin => `
+                        <div class="mt-1">
+                            <p>${tiffin.name} - ${Utils.formatDate(tiffin.date)}</p>
+                            <p>Price: ${Utils.formatCurrency(tiffin.price)}</p>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        } catch (error) {
+            console.error('Error loading invoices:', error);
+        }
+    }
+
+    static async loadNotices() {
+        try {
+            const data = await API.getNotices();
+            this.renderNotices(data.notices, document.getElementById('all-notices-container'));
+        } catch (error) {
+            console.error('Error loading notices:', error);
+        }
+    }
+
+    static async loadAdminDashboard() {
+        if (!Auth.isAdmin()) return;
+
+        try {
+            const [users, requests] = await Promise.all([
+                API.getUsers(),
+                API.getRequests()
+            ]);
+
+            // Render users
+            this.elements.usersList.innerHTML = users.users.map(user => `
+                <div class="card">
+                    <p>Phone: ${user.phone}</p>
+                    <p>Role: ${user.role}</p>
+                    <p>Created: ${Utils.formatDateTime(user.created_at)}</p>
+                </div>
+            `).join('');
+
+            // Render special requests
+            this.elements.specialRequestsList.innerHTML = requests.requests.map(request => `
+                <div class="card">
+                    <p>User: ${request.user_id}</p>
+                    <p>${request.description}</p>
+                    <p>Date: ${Utils.formatDate(request.date)}</p>
+                    <p>Status: ${request.status}</p>
+                </div>
+            `).join('');
+        } catch (error) {
+            console.error('Error loading admin dashboard:', error);
+        }
+    }
+
+    static async handleCancelTiffin(tiffinId) {
+        try {
+            await API.cancelTiffin(tiffinId);
+            Utils.showToast('Tiffin cancelled successfully');
+            this.loadHomePage();
+        } catch (error) {
+            Utils.showToast('Failed to cancel tiffin', 'error');
+        }
+    }
+
+    static async handleVote(pollId, option) {
+        try {
+            await API.votePoll(pollId, option);
+            Utils.showToast('Vote recorded successfully');
+            this.loadHomePage();
+        } catch (error) {
+            Utils.showToast('Failed to record vote', 'error');
+        }
+    }
+
+    static async handleCreateTiffin(event) {
+        event.preventDefault();
+        try {
+            const formData = new FormData(event.target);
+            await API.createTiffin(Object.fromEntries(formData));
+            Utils.showToast('Tiffin created successfully');
+            event.target.reset();
+            this.loadHomePage();
+        } catch (error) {
+            Utils.showToast('Failed to create tiffin', 'error');
+        }
+    }
+
+    static async handleCreateUser(event) {
+        event.preventDefault();
+        try {
+            const formData = new FormData(event.target);
+            await API.createUser(Object.fromEntries(formData));
+            Utils.showToast('User created successfully');
+            event.target.reset();
+            this.loadAdminDashboard();
+        } catch (error) {
+            Utils.showToast('Failed to create user', 'error');
+        }
+    }
+
+    static async handleCreateNotice(event) {
+        event.preventDefault();
+        try {
+            const formData = new FormData(event.target);
+            await API.createNotice(Object.fromEntries(formData));
+            Utils.showToast('Notice created successfully');
+            event.target.reset();
+            this.loadNotices();
+        } catch (error) {
+            Utils.showToast('Failed to create notice', 'error');
+        }
+    }
+
+    static async handleCreatePoll(event) {
+        event.preventDefault();
+        try {
+            const formData = new FormData(event.target);
+            const options = Array.from(formData.getAll('options[]'));
+            const pollData = {
+                question: formData.get('question'),
+                options,
+                start_date: formData.get('start_date'),
+                end_date: formData.get('end_date')
+            };
+            await API.createPoll(pollData);
+            Utils.showToast('Poll created successfully');
+            event.target.reset();
+            this.loadHomePage();
+        } catch (error) {
+            Utils.showToast('Failed to create poll', 'error');
+        }
+    }
+
+    static async handleSpecialRequest(event) {
+        event.preventDefault();
+        try {
+            const formData = new FormData(event.target);
+            await API.createRequest(Object.fromEntries(formData));
+            Utils.showToast('Special request submitted successfully');
+            event.target.reset();
+        } catch (error) {
+            Utils.showToast('Failed to submit request', 'error');
+        }
+    }
+
+    static addPollOption() {
+        const optionsContainer = this.elements.pollOptionsContainer;
+        const newOption = document.createElement('input');
+        newOption.type = 'text';
+        newOption.name = 'options[]';
+        newOption.className = 'form-control mb-1';
+        newOption.placeholder = `Option ${optionsContainer.children.length + 1}`;
+        newOption.required = true;
+        optionsContainer.appendChild(newOption);
+    }
+
+    static setupAutoRefresh() {
+        setInterval(() => {
+            if (Auth.isAuthenticated()) {
+                this.loadHomePage();
+            }
+        }, config.REFRESH_INTERVAL);
+    }
+}
+
+// Initialize the application
+document.addEventListener('DOMContentLoaded', () => UI.init());
+</script>
+</body>
+</html>
