@@ -150,61 +150,96 @@ def admin_required(f):
 def login():
     try:
         data = request.get_json()
+        app.logger.debug(f"Received data: {data}")  # Debug log
+        
         user_id = data.get('user_id')
         password = data.get('password')
         
         app.logger.info(f"Login attempt for user_id: {user_id}")
         
         if not user_id or not password:
-            app.logger.warning("Missing credentials")
             return jsonify({'error': 'Missing credentials'}), 400
         
         db = get_db()
         user = db.users.find_one({'user_id': user_id})
         
         if not user:
-            app.logger.warning(f"User not found: {user_id}")
             return jsonify({'error': 'Invalid credentials'}), 401
 
-        # Ensure password is string and encode it
-        if not isinstance(password, str):
-            password = str(password)
-        password = password.encode('utf-8')
+        try:
+            # Convert password to bytes for comparison
+            password_bytes = password.encode('utf-8')
+            stored_password = user['password']
 
-        # Ensure stored password is bytes
-        stored_password = user['password']
-        if isinstance(stored_password, str):
-            stored_password = stored_password.encode('utf-8')
-        
-        # Debug logging
-        app.logger.debug(f"Password type: {type(password)}")
-        app.logger.debug(f"Stored password type: {type(stored_password)}")
+            # If stored password is string, convert to bytes
+            if isinstance(stored_password, str):
+                stored_password = stored_password.encode('utf-8')
 
-        if not bcrypt.checkpw(password, stored_password):
-            app.logger.warning(f"Invalid password for user: {user_id}")
-            return jsonify({'error': 'Invalid credentials'}), 401
-        
-        token = jwt.encode({
-            'user_id': user['user_id'],
-            'role': user['role'],
-            'exp': datetime.utcnow() + timedelta(days=1)
-        }, Config.JWT_SECRET)
-        
-        app.logger.info(f"Successful login for user: {user_id}")
-        
-        # Ensure token is string
-        if isinstance(token, bytes):
-            token = token.decode('utf-8')
-        
-        return jsonify({
-            'token': token,
-            'role': user['role'],
-            'user_id': user['user_id']
-        })
+            # Check password
+            if bcrypt.checkpw(password_bytes, stored_password):
+                token = jwt.encode({
+                    'user_id': user['user_id'],
+                    'role': user['role'],
+                    'exp': datetime.utcnow() + timedelta(days=1)
+                }, Config.JWT_SECRET)
+
+                # Ensure token is string
+                if isinstance(token, bytes):
+                    token = token.decode('utf-8')
+
+                return jsonify({
+                    'token': token,
+                    'role': user['role'],
+                    'user_id': user['user_id']
+                })
+            else:
+                return jsonify({'error': 'Invalid credentials'}), 401
+
+        except Exception as e:
+            app.logger.error(f"Password comparison error: {str(e)}")
+            return jsonify({'error': 'Authentication failed'}), 401
 
     except Exception as e:
         app.logger.error(f"Login error: {str(e)}")
-        return jsonify({'error': str(e)}), 500  # Return actual error for debugging
+        return jsonify({'error': 'Login failed'}), 500
+
+@app.route('/create-test-user', methods=['POST'])
+def create_test_user():
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id')
+        password = data.get('password')
+        
+        if not user_id or not password:
+            return jsonify({'error': 'Missing user_id or password'}), 400
+            
+        db = get_db()
+        
+        # Check if user already exists
+        existing_user = db.users.find_one({'user_id': user_id})
+        if existing_user:
+            return jsonify({'error': 'User already exists'}), 400
+            
+        # Hash password
+        password_bytes = password.encode('utf-8')
+        hashed_password = bcrypt.hashpw(password_bytes, bcrypt.gensalt())
+        
+        # Create user
+        user = {
+            'user_id': user_id,
+            'password': hashed_password,
+            'role': 'user',
+            'phone': '1234567890',  # Default phone
+            'created_at': datetime.utcnow()
+        }
+        
+        db.users.insert_one(user)
+        
+        return jsonify({'message': 'Test user created successfully'})
+        
+    except Exception as e:
+        app.logger.error(f"Error creating test user: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 # User management routes
 @app.route('/users', methods=['POST'])
