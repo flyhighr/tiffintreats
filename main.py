@@ -71,10 +71,12 @@ def init_admin():
     try:
         db = get_db()
         if not db.users.find_one({'role': 'admin'}):
-            hashed_password = bcrypt.hashpw(
-                Config.ADMIN_PASSWORD.encode('utf-8'),
-                bcrypt.gensalt()
-            )
+            password = Config.ADMIN_PASSWORD
+            if isinstance(password, str):
+                password = password.encode('utf-8')
+            
+            hashed_password = bcrypt.hashpw(password, bcrypt.gensalt())
+            
             admin = {
                 'user_id': Config.ADMIN_ID,
                 'phone': Config.ADMIN_PHONE,
@@ -146,26 +148,58 @@ def admin_required(f):
 @app.route('/login', methods=['POST'])
 @handle_errors
 def login():
-    data = request.get_json()
-    user_id = data.get('user_id')
-    password = data.get('password')
-    
-    if not user_id or not password:
-        return jsonify({'error': 'Missing credentials'}), 400
-    
-    db = get_db()
-    user = db.users.find_one({'user_id': user_id})
-    
-    if not user or not bcrypt.checkpw(password.encode('utf-8'), user['password']):
-        return jsonify({'error': 'Invalid credentials'}), 401
-    
-    token = jwt.encode({
-        'user_id': user['user_id'],
-        'role': user['role'],
-        'exp': datetime.utcnow() + timedelta(days=1)
-    }, Config.JWT_SECRET)
-    
-    return jsonify({'token': token, 'role': user['role']})
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id')
+        password = data.get('password')
+        
+        # Log the incoming request (remove in production)
+        app.logger.info(f"Login attempt for user_id: {user_id}")
+        
+        if not user_id or not password:
+            return jsonify({'error': 'Missing credentials'}), 400
+        
+        db = get_db()
+        user = db.users.find_one({'user_id': user_id})
+        
+        if not user:
+            app.logger.warning(f"User not found: {user_id}")
+            return jsonify({'error': 'Invalid credentials'}), 401
+        
+        # Convert password to bytes if it's not already
+        if isinstance(password, str):
+            password = password.encode('utf-8')
+        
+        # Convert stored password to bytes if it's not already
+        stored_password = user['password']
+        if isinstance(stored_password, str):
+            stored_password = stored_password.encode('utf-8')
+        
+        if not bcrypt.checkpw(password, stored_password):
+            app.logger.warning(f"Invalid password for user: {user_id}")
+            return jsonify({'error': 'Invalid credentials'}), 401
+        
+        token = jwt.encode({
+            'user_id': user['user_id'],
+            'role': user['role'],
+            'exp': datetime.utcnow() + timedelta(days=1)
+        }, Config.JWT_SECRET)
+        
+        app.logger.info(f"Successful login for user: {user_id}")
+        
+        # If token is bytes, decode it to string
+        if isinstance(token, bytes):
+            token = token.decode('utf-8')
+        
+        return jsonify({
+            'token': token,
+            'role': user['role'],
+            'user_id': user['user_id']
+        })
+
+    except Exception as e:
+        app.logger.error(f"Login error: {str(e)}")
+        return jsonify({'error': 'Login failed'}), 500
 
 # User management routes
 @app.route('/users', methods=['POST'])
