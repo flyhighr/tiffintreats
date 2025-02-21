@@ -505,4 +505,5 @@ if __name__ == '__main__':
     db.notices.create_index('created_at')
     db.polls.create_index('end_date')
     
-    app.run(debug=True)
+    # Run the application
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
