@@ -16,7 +16,14 @@ from functools import wraps
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+# Update CORS configuration
+CORS(app, resources={
+    r"/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Authorization", "Content-Type"]
+    }
+})
 
 # Configuration
 MONGO_URI = os.getenv('MONGO_URI')
@@ -84,36 +91,50 @@ ping_thread.daemon = True
 ping_thread.start()
 
 # Authentication routes
-@app.route('/login', methods=['POST'])
+@app.route('/login', methods=['POST', 'OPTIONS'])
 def login():
-    data = request.json
-    user_id = data.get('userId')
-    password = data.get('password')
+    if request.method == 'OPTIONS':
+        return '', 200
+        
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'message': 'No data provided'}), 400
+            
+        user_id = data.get('userId')
+        password = data.get('password')
 
-    user = db.users.find_one({
-        '$or': [
-            {'userId': user_id},
-            {'phone': user_id}
-        ]
-    })
+        if not user_id or not password:
+            return jsonify({'message': 'Missing credentials'}), 400
 
-    if not user:
-        return jsonify({'message': 'User not found'}), 404
+        user = db.users.find_one({
+            '$or': [
+                {'userId': user_id},
+                {'phone': user_id}
+            ]
+        })
 
-    if not bcrypt.checkpw(password.encode('utf-8'), user['password']):
-        return jsonify({'message': 'Invalid password'}), 401
+        if not user:
+            return jsonify({'message': 'User not found'}), 404
 
-    token = jwt.encode({
-        'user_id': str(user['_id']),
-        'role': user['role'],
-        'exp': datetime.utcnow() + timedelta(days=1)
-    }, JWT_SECRET_KEY)
+        if not bcrypt.checkpw(password.encode('utf-8'), user['password']):
+            return jsonify({'message': 'Invalid password'}), 401
 
-    return jsonify({
-        'token': token,
-        'role': user['role'],
-        'userId': user['userId']
-    }), 200
+        token = jwt.encode({
+            'user_id': str(user['_id']),
+            'role': user['role'],
+            'exp': datetime.utcnow() + timedelta(days=1)
+        }, JWT_SECRET_KEY)
+
+        return jsonify({
+            'token': token,
+            'role': user['role'],
+            'userId': user['userId']
+        }), 200
+        
+    except Exception as e:
+        print(f"Login error: {str(e)}")  # Add logging
+        return jsonify({'message': 'Internal server error'}), 500
     
 # Admin user management routes
 @app.route('/admin/users', methods=['POST'])
@@ -498,11 +519,11 @@ def manage_settings(current_user):
     return jsonify({'message': 'Settings updated successfully'}), 200
 
 
-# Add this to your app initialization
+# Remove app.run() from create_default_admin function and place it at the bottom
 def create_default_admin():
     if not db.users.find_one({'role': 'admin'}):
         admin_user = {
-            'userId': 'admin',
+            'userId': ADMIN_ID,  # Use the environment variable
             'phone': ADMIN_PHONE,
             'password': bcrypt.hashpw(ADMIN_PASSWORD.encode('utf-8'), bcrypt.gensalt()),
             'name': 'Admin',
@@ -511,11 +532,9 @@ def create_default_admin():
         }
         db.users.insert_one(admin_user)
 
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
 if __name__ == '__main__':
-    # Ensure indexes
-    
     create_default_admin()
+    # Create indexes
     db.users.create_index('userId', unique=True)
     db.users.create_index('phone', unique=True)
     db.tiffins.create_index([('date', 1), ('type', 1)])
