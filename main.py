@@ -144,15 +144,20 @@ def admin_required(f):
 def login():
     try:
         data = request.get_json()
-        app.logger.debug(f"Received data: {data}")  # Debug log
+        
+        # Log the received data for debugging
+        app.logger.debug(f"Received login data: {data}")
         
         phone = data.get('phone')
         password = data.get('password')
         
-        app.logger.info(f"Login attempt for phone: {phone}")
-        
         if not phone or not password:
-            return jsonify({'error': 'Missing credentials'}), 400
+            return jsonify({'error': 'Missing phone or password'}), 400
+            
+        # Ensure phone is string
+        phone = str(phone)
+        
+        app.logger.info(f"Login attempt for phone: {phone}")
         
         db = get_db()
         user = db.users.find_one({'phone': phone})
@@ -177,43 +182,8 @@ def login():
 
     except Exception as e:
         app.logger.error(f"Login error: {str(e)}")
-        return jsonify({'error': 'Login failed'}), 500
-
-@app.route('/create-test-user', methods=['POST'])
-def create_test_user():
-    try:
-        data = request.get_json()
-        phone = data.get('phone')
-        password = data.get('password')
-        
-        if not phone or not password:
-            return jsonify({'error': 'Missing phone or password'}), 400
-            
-        db = get_db()
-        
-        # Check if user already exists
-        existing_user = db.users.find_one({'phone': phone})
-        if existing_user:
-            return jsonify({'error': 'User already exists'}), 400
-            
-        # Hash password
-        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-        
-        # Create user
-        user = {
-            'phone': phone,
-            'password': hashed_password,
-            'role': 'user',
-            'created_at': datetime.utcnow()
-        }
-        
-        db.users.insert_one(user)
-        
-        return jsonify({'message': 'Test user created successfully'})
-        
-    except Exception as e:
-        app.logger.error(f"Error creating test user: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
 
 # User management routes
 @app.route('/users', methods=['POST'])
