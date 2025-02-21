@@ -16,7 +16,7 @@ from functools import wraps
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Configuration
 MONGO_URI = os.getenv('MONGO_URI')
@@ -88,14 +88,15 @@ ping_thread.start()
 def login():
     data = request.json
     user_id = data.get('userId')
-    phone = data.get('phone')
     password = data.get('password')
 
-    user = None
-    if user_id:
-        user = db.users.find_one({'userId': user_id})
-    elif phone:
-        user = db.users.find_one({'phone': phone})
+    # Try to find user by userId or phone
+    user = db.users.find_one({
+        '$or': [
+            {'userId': user_id},
+            {'phone': user_id}
+        ]
+    })
 
     if not user:
         return jsonify({'message': 'User not found'}), 404
@@ -114,7 +115,7 @@ def login():
         'role': user['role'],
         'userId': user['userId']
     }), 200
-
+    
 # Admin user management routes
 @app.route('/admin/users', methods=['POST'])
 @admin_required
@@ -497,8 +498,25 @@ def manage_settings(current_user):
     )
     return jsonify({'message': 'Settings updated successfully'}), 200
 
+
+# Add this to your app initialization
+def create_default_admin():
+    if not db.users.find_one({'role': 'admin'}):
+        admin_user = {
+            'userId': 'admin',
+            'phone': ADMIN_PHONE,
+            'password': bcrypt.hashpw(ADMIN_PASSWORD.encode('utf-8'), bcrypt.gensalt()),
+            'name': 'Admin',
+            'role': 'admin',
+            'created_at': datetime.utcnow()
+        }
+        db.users.insert_one(admin_user)
+
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))
 if __name__ == '__main__':
     # Ensure indexes
+    
+    create_default_admin()
     db.users.create_index('userId', unique=True)
     db.users.create_index('phone', unique=True)
     db.tiffins.create_index([('date', 1), ('type', 1)])
