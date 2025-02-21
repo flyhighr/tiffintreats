@@ -21,7 +21,6 @@ load_dotenv()
 class Config:
     MONGO_URI = os.getenv('MONGO_URI')
     JWT_SECRET = os.getenv('JWT_SECRET')
-    ADMIN_ID = os.getenv('ADMIN_ID')
     ADMIN_PHONE = os.getenv('ADMIN_PHONE')
     ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD')
     LOG_FOLDER = 'logs'
@@ -71,14 +70,9 @@ def init_admin():
     try:
         db = get_db()
         if not db.users.find_one({'role': 'admin'}):
-            password = Config.ADMIN_PASSWORD
-            if isinstance(password, str):
-                password = password.encode('utf-8')
-            
-            hashed_password = bcrypt.hashpw(password, bcrypt.gensalt())
+            hashed_password = bcrypt.hashpw(Config.ADMIN_PASSWORD.encode('utf-8'), bcrypt.gensalt())
             
             admin = {
-                'user_id': Config.ADMIN_ID,
                 'phone': Config.ADMIN_PHONE,
                 'password': hashed_password,
                 'role': 'admin',
@@ -152,52 +146,34 @@ def login():
         data = request.get_json()
         app.logger.debug(f"Received data: {data}")  # Debug log
         
-        user_id = data.get('user_id')
+        phone = data.get('phone')
         password = data.get('password')
         
-        app.logger.info(f"Login attempt for user_id: {user_id}")
+        app.logger.info(f"Login attempt for phone: {phone}")
         
-        if not user_id or not password:
+        if not phone or not password:
             return jsonify({'error': 'Missing credentials'}), 400
         
         db = get_db()
-        user = db.users.find_one({'user_id': user_id})
+        user = db.users.find_one({'phone': phone})
         
         if not user:
             return jsonify({'error': 'Invalid credentials'}), 401
 
-        try:
-            # Convert password to bytes for comparison
-            password_bytes = password.encode('utf-8')
-            stored_password = user['password']
+        if bcrypt.checkpw(password.encode('utf-8'), user['password']):
+            token = jwt.encode({
+                'user_id': str(user['_id']),
+                'role': user['role'],
+                'exp': datetime.utcnow() + timedelta(days=1)
+            }, Config.JWT_SECRET)
 
-            # If stored password is string, convert to bytes
-            if isinstance(stored_password, str):
-                stored_password = stored_password.encode('utf-8')
-
-            # Check password
-            if bcrypt.checkpw(password_bytes, stored_password):
-                token = jwt.encode({
-                    'user_id': user['user_id'],
-                    'role': user['role'],
-                    'exp': datetime.utcnow() + timedelta(days=1)
-                }, Config.JWT_SECRET)
-
-                # Ensure token is string
-                if isinstance(token, bytes):
-                    token = token.decode('utf-8')
-
-                return jsonify({
-                    'token': token,
-                    'role': user['role'],
-                    'user_id': user['user_id']
-                })
-            else:
-                return jsonify({'error': 'Invalid credentials'}), 401
-
-        except Exception as e:
-            app.logger.error(f"Password comparison error: {str(e)}")
-            return jsonify({'error': 'Authentication failed'}), 401
+            return jsonify({
+                'token': token,
+                'role': user['role'],
+                'user_id': str(user['_id'])
+            })
+        else:
+            return jsonify({'error': 'Invalid credentials'}), 401
 
     except Exception as e:
         app.logger.error(f"Login error: {str(e)}")
@@ -207,29 +183,27 @@ def login():
 def create_test_user():
     try:
         data = request.get_json()
-        user_id = data.get('user_id')
+        phone = data.get('phone')
         password = data.get('password')
         
-        if not user_id or not password:
-            return jsonify({'error': 'Missing user_id or password'}), 400
+        if not phone or not password:
+            return jsonify({'error': 'Missing phone or password'}), 400
             
         db = get_db()
         
         # Check if user already exists
-        existing_user = db.users.find_one({'user_id': user_id})
+        existing_user = db.users.find_one({'phone': phone})
         if existing_user:
             return jsonify({'error': 'User already exists'}), 400
             
         # Hash password
-        password_bytes = password.encode('utf-8')
-        hashed_password = bcrypt.hashpw(password_bytes, bcrypt.gensalt())
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
         
         # Create user
         user = {
-            'user_id': user_id,
+            'phone': phone,
             'password': hashed_password,
             'role': 'user',
-            'phone': '1234567890',  # Default phone
             'created_at': datetime.utcnow()
         }
         
@@ -248,29 +222,25 @@ def create_test_user():
 def create_user():
     try:
         data = request.get_json()
-        required_fields = ['user_id', 'phone', 'password']
+        required_fields = ['phone', 'password']
         if not all(field in data for field in required_fields):
             return jsonify({'error': 'Missing required fields'}), 400
         
         db = get_db()
-        if db.users.find_one({'user_id': data['user_id']}):
-            return jsonify({'error': 'User ID already exists'}), 400
+        if db.users.find_one({'phone': data['phone']}):
+            return jsonify({'error': 'Phone already exists'}), 400
         
-        # Ensure password is string and encode it
-        password = str(data['password']).encode('utf-8')
-        hashed_password = bcrypt.hashpw(password, bcrypt.gensalt())
+        hashed_password = bcrypt.hashpw(data['password'].encode('utf-8'), bcrypt.gensalt())
         
         user = {
-            'user_id': data['user_id'],
             'phone': data['phone'],
             'password': hashed_password,
             'role': 'user',
-            'delivery_address': data.get('delivery_address', ''),
             'created_at': datetime.utcnow()
         }
         
         db.users.insert_one(user)
-        app.logger.info(f"User created successfully: {data['user_id']}")
+        app.logger.info(f"User created successfully: {data['phone']}")
         return jsonify({'message': 'User created successfully'})
     
     except Exception as e:
@@ -295,7 +265,7 @@ def update_user(user_id):
     if update_data:
         db = get_db()
         result = db.users.update_one(
-            {'user_id': user_id},
+            {'_id': ObjectId(user_id)},
             {'$set': update_data}
         )
         if result.matched_count == 0:
