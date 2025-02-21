@@ -90,7 +90,6 @@ def login():
     user_id = data.get('userId')
     password = data.get('password')
 
-    # Try to find user by userId or phone
     user = db.users.find_one({
         '$or': [
             {'userId': user_id},
