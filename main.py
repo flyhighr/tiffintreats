@@ -1,589 +1,473 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from pymongo import MongoClient, errors
-from datetime import datetime, timedelta
-import bcrypt
-import jwt
+from fastapi import FastAPI, HTTPException, Depends, Security, BackgroundTasks
+from fastapi.security import APIKeyHeader
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict
+from datetime import datetime, time, timedelta
+from motor.motor_asyncio import AsyncIOMotorClient
+from bson import ObjectId
 import os
 from dotenv import load_dotenv
-from apscheduler.schedulers.background import BackgroundScheduler
-import requests
-from bson import ObjectId
-import logging
-from logging.handlers import RotatingFileHandler
-from functools import wraps
-import time
+import uvicorn
+import pytz
+from enum import Enum
 
 # Load environment variables
 load_dotenv()
 
-# Configuration
-class Config:
-    MONGO_URI = os.getenv('MONGO_URI')
-    JWT_SECRET = os.getenv('JWT_SECRET')
-    ADMIN_PHONE = os.getenv('ADMIN_PHONE')
-    ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD')
-    LOG_FOLDER = 'logs'
-    MAX_RETRIES = 3
-    RETRY_DELAY = 1  # seconds
+# Initialize FastAPI
+app = FastAPI(title="TiffinTreats API")
 
-# Application setup
-app = Flask(__name__)
-CORS(app)
+# CORS Configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Logging setup
-def setup_logging():
-    if not os.path.exists(Config.LOG_FOLDER):
-        os.mkdir(Config.LOG_FOLDER)
-    file_handler = RotatingFileHandler(
-        f'{Config.LOG_FOLDER}/tiffin_treats.log',
-        maxBytes=10240,
-        backupCount=10
+# Database Configuration
+MONGODB_URL = os.getenv("MONGODB_URL")
+client = AsyncIOMotorClient(MONGODB_URL)
+db = client.tiffintreats
+
+# Admin Configuration
+ADMIN_IDS = os.getenv("ADMIN_IDS").split(",")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+
+# Timezone Configuration
+IST = pytz.timezone('Asia/Kolkata')
+
+# Enums
+class TiffinTime(str, Enum):
+    MORNING = "morning"
+    AFTERNOON = "afternoon"
+    EVENING = "evening"
+
+class TiffinStatus(str, Enum):
+    SCHEDULED = "scheduled"
+    PREPARING = "preparing"
+    PREPARED = "prepared"
+    OUT_FOR_DELIVERY = "out_for_delivery"
+    DELIVERED = "delivered"
+    CANCELLED = "cancelled"
+
+# Models
+class UserBase(BaseModel):
+    user_id: str
+    name: str
+    address: str
+
+class UserCreate(UserBase):
+    password: str
+
+class User(UserBase):
+    active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(IST))
+    
+    class Config:
+        orm_mode = True
+
+class TiffinBase(BaseModel):
+    date: str
+    time: TiffinTime
+    description: str
+    price: float
+    cancellation_time: str
+    delivery_time: str
+    status: TiffinStatus = TiffinStatus.SCHEDULED
+    menu_items: List[str]
+    
+class TiffinCreate(TiffinBase):
+    assigned_users: List[str]
+
+class Tiffin(TiffinBase):
+    id: str = Field(alias="_id")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(IST))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(IST))
+
+class Notice(BaseModel):
+    title: str
+    content: str
+    priority: int = 0
+    created_at: datetime = Field(default_factory=lambda: datetime.now(IST))
+    expires_at: Optional[datetime] = None
+
+class PollOption(BaseModel):
+    option: str
+    votes: int = 0
+
+class Poll(BaseModel):
+    question: str
+    options: List[PollOption]
+    start_date: datetime
+    end_date: datetime
+    active: bool = True
+
+class TiffinRequest(BaseModel):
+    user_id: str
+    description: str
+    preferred_date: str
+    preferred_time: TiffinTime
+    special_instructions: Optional[str] = None
+
+class Invoice(BaseModel):
+    user_id: str
+    start_date: str
+    end_date: str
+    tiffins: List[str]
+    total_amount: float
+    paid: bool = False
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(IST))
+
+# Utility Functions
+def parse_time(time_str: str) -> datetime:
+    return datetime.strptime(time_str, "%H:%M").replace(tzinfo=IST)
+
+async def is_cancellation_allowed(tiffin: dict) -> bool:
+    current_time = datetime.now(IST)
+    cancellation_time = parse_time(tiffin["cancellation_time"])
+    return current_time < cancellation_time
+
+# Authentication Middleware
+async def verify_admin(
+    user_id: str = Depends(APIKeyHeader(name="user-id")),
+    password: str = Depends(APIKeyHeader(name="password"))
+):
+    if user_id not in ADMIN_IDS or password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return user_id
+
+async def verify_user(
+    user_id: str = Depends(APIKeyHeader(name="user-id")),
+    password: str = Depends(APIKeyHeader(name="password"))
+):
+    user = await db.users.find_one({"user_id": user_id})
+    if not user or user["password"] != password:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return user_id
+
+# Health Check Endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "timestamp": datetime.now(IST)}
+
+# User Endpoints
+@app.post("/auth/login")
+async def login(user_id: str, password: str):
+    if user_id in ADMIN_IDS and password == ADMIN_PASSWORD:
+        return {"status": "success", "role": "admin"}
+    
+    user = await db.users.find_one({"user_id": user_id})
+    if not user or user["password"] != password:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    return {"status": "success", "role": "user"}
+
+@app.get("/user/tiffins", response_model=List[Tiffin])
+async def get_user_tiffins(
+    user_id: str = Depends(verify_user),
+    date: Optional[str] = None
+):
+    query = {"assigned_users": user_id}
+    if date:
+        query["date"] = date
+    
+    tiffins = await db.tiffins.find(query).to_list(None)
+    return tiffins
+
+@app.post("/user/cancel-tiffin")
+async def cancel_tiffin(
+    tiffin_id: str,
+    user_id: str = Depends(verify_user)
+):
+    tiffin = await db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
+    if not tiffin:
+        raise HTTPException(status_code=404, detail="Tiffin not found")
+    
+    if user_id not in tiffin["assigned_users"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    if not await is_cancellation_allowed(tiffin):
+        raise HTTPException(status_code=400, detail="Cancellation time has passed")
+    
+    await db.tiffins.update_one(
+        {"_id": ObjectId(tiffin_id)},
+        {
+            "$set": {"status": TiffinStatus.CANCELLED},
+            "$pull": {"assigned_users": user_id}
+        }
     )
-    file_handler.setFormatter(logging.Formatter(
-        '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
-    ))
-    file_handler.setLevel(logging.INFO)
-    app.logger.addHandler(file_handler)
-    app.logger.setLevel(logging.INFO)
-    app.logger.info('Tiffin Treats startup')
+    
+    return {"status": "success"}
 
-setup_logging()
+# Admin Endpoints
+@app.post("/admin/users", dependencies=[Depends(verify_admin)])
+async def create_user(user: UserCreate):
+    existing_user = await db.users.find_one({"user_id": user.user_id})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User ID already exists")
+    
+    user_dict = user.dict()
+    await db.users.insert_one(user_dict)
+    return {"status": "success", "user_id": user.user_id}
 
-# MongoDB connection with retry mechanism
-def get_db():
-    retries = 0
-    while retries < Config.MAX_RETRIES:
-        try:
-            client = MongoClient(Config.MONGO_URI, serverSelectionTimeoutMS=5000)
-            client.admin.command('ping')  # Test connection
-            return client.tiffin_treats
-        except errors.ServerSelectionTimeoutError:
-            retries += 1
-            if retries == Config.MAX_RETRIES:
-                app.logger.error("Failed to connect to MongoDB after multiple retries")
-                raise
-            time.sleep(Config.RETRY_DELAY)
+@app.post("/admin/tiffins", dependencies=[Depends(verify_admin)])
+async def create_tiffin(tiffin: TiffinCreate):
+    tiffin_dict = tiffin.dict()
+    tiffin_dict["created_at"] = datetime.now(IST)
+    result = await db.tiffins.insert_one(tiffin_dict)
+    return {"status": "success", "tiffin_id": str(result.inserted_id)}
 
-# Initialize admin user
-def init_admin():
-    try:
-        db = get_db()
-        if not db.users.find_one({'role': 'admin'}):
-            hashed_password = bcrypt.hashpw(Config.ADMIN_PASSWORD.encode('utf-8'), bcrypt.gensalt())
-            
-            admin = {
-                'phone': Config.ADMIN_PHONE,
-                'password': hashed_password,
-                'role': 'admin',
-                'created_at': datetime.utcnow()
+@app.put("/admin/tiffins/{tiffin_id}/status", dependencies=[Depends(verify_admin)])
+async def update_tiffin_status(tiffin_id: str, status: TiffinStatus):
+    result = await db.tiffins.update_one(
+        {"_id": ObjectId(tiffin_id)},
+        {
+            "$set": {
+                "status": status,
+                "updated_at": datetime.now(IST)
             }
-            db.users.insert_one(admin)
-            app.logger.info("Admin user initialized successfully")
-    except Exception as e:
-        app.logger.error(f"Error initializing admin user: {str(e)}")
-        raise
-
-init_admin()
-
-# Error handling
-def handle_errors(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        try:
-            return f(*args, **kwargs)
-        except errors.PyMongoError as e:
-            app.logger.error(f"Database error: {str(e)}")
-            return jsonify({'error': 'Database error occurred'}), 500
-        except Exception as e:
-            app.logger.error(f"Unexpected error: {str(e)}")
-            return jsonify({'error': 'An unexpected error occurred'}), 500
-    return decorated
-
-# Authentication decorator with error handling
-def auth_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = request.headers.get('Authorization')
-        if not token:
-            return jsonify({'error': 'No token provided'}), 401
-        try:
-            payload = jwt.decode(token, Config.JWT_SECRET, algorithms=['HS256'])
-            request.user = payload
-            return f(*args, **kwargs)
-        except jwt.ExpiredSignatureError:
-            return jsonify({'error': 'Token expired'}), 401
-        except jwt.InvalidTokenError:
-            return jsonify({'error': 'Invalid token'}), 401
-        except Exception as e:
-            app.logger.error(f"Authentication error: {str(e)}")
-            return jsonify({'error': 'Authentication failed'}), 401
-    return decorated
-
-# Admin decorator with error handling
-def admin_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = request.headers.get('Authorization')
-        if not token:
-            return jsonify({'error': 'No token provided'}), 401
-        try:
-            payload = jwt.decode(token, Config.JWT_SECRET, algorithms=['HS256'])
-            if payload['role'] != 'admin':
-                return jsonify({'error': 'Admin access required'}), 403
-            request.user = payload
-            return f(*args, **kwargs)
-        except Exception as e:
-            app.logger.error(f"Admin authentication error: {str(e)}")
-            return jsonify({'error': 'Authentication failed'}), 401
-    return decorated
-
-# Authentication routes
-@app.route('/login', methods=['POST'])
-@handle_errors
-def login():
-    try:
-        data = request.get_json()
-        
-        # Validate input
-        if not data or 'phone' not in data or 'password' not in data:
-            return jsonify({'error': 'Missing phone or password'}), 400
-            
-        # Convert phone to string and ensure password is string
-        phone = str(data['phone']).strip()
-        password = str(data['password']).strip()
-        
-        if not phone or not password:
-            return jsonify({'error': 'Phone and password cannot be empty'}), 400
-        
-        app.logger.info(f"Login attempt for phone: {phone}")
-        
-        db = get_db()
-        user = db.users.find_one({'phone': phone})
-        
-        if not user:
-            app.logger.warning(f"Login failed: User not found for phone {phone}")
-            return jsonify({'error': 'Invalid credentials'}), 401
-
-        # Debug logging
-        app.logger.debug(f"Found user: {user.get('phone')}")
-        
-        # Ensure password is properly encoded before checking
-        try:
-            is_valid = bcrypt.checkpw(
-                password.encode('utf-8'),
-                user['password']
-            )
-        except Exception as e:
-            app.logger.error(f"Password verification error: {str(e)}")
-            return jsonify({'error': 'Password verification failed'}), 500
-
-        if is_valid:
-            token = jwt.encode({
-                'user_id': str(user['_id']),
-                'role': user['role'],
-                'exp': datetime.utcnow() + timedelta(days=1)
-            }, Config.JWT_SECRET)
-
-            return jsonify({
-                'token': token,
-                'role': user['role'],
-                'user_id': str(user['_id'])
-            })
-        else:
-            app.logger.warning(f"Login failed: Invalid password for phone {phone}")
-            return jsonify({'error': 'Invalid credentials'}), 401
-
-    except Exception as e:
-        app.logger.error(f"Login error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-
-# User management routes
-@app.route('/users', methods=['POST'])
-@admin_required
-@handle_errors
-def create_user():
-    try:
-        data = request.get_json()
-        required_fields = ['phone', 'password']
-        if not all(field in data for field in required_fields):
-            return jsonify({'error': 'Missing required fields'}), 400
-        
-        db = get_db()
-        if db.users.find_one({'phone': data['phone']}):
-            return jsonify({'error': 'Phone already exists'}), 400
-        
-        hashed_password = bcrypt.hashpw(data['password'].encode('utf-8'), bcrypt.gensalt())
-        
-        user = {
-            'phone': data['phone'],
-            'password': hashed_password,
-            'role': 'user',
-            'created_at': datetime.utcnow()
         }
-        
-        db.users.insert_one(user)
-        app.logger.info(f"User created successfully: {data['phone']}")
-        return jsonify({'message': 'User created successfully'})
-    
-    except Exception as e:
-        app.logger.error(f"Error creating user: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Tiffin not found")
+    return {"status": "success"}
 
-@app.route('/users/<user_id>', methods=['PUT'])
-@auth_required
-@handle_errors
-def update_user(user_id):
-    if request.user['role'] != 'admin' and request.user['user_id'] != user_id:
-        return jsonify({'error': 'Unauthorized'}), 403
-    
-    data = request.get_json()
-    if not data:
-        return jsonify({'error': 'No update data provided'}), 400
-    
-    update_data = {}
-    if 'delivery_address' in data:
-        update_data['delivery_address'] = data['delivery_address']
-    
-    if update_data:
-        db = get_db()
-        result = db.users.update_one(
-            {'_id': ObjectId(user_id)},
-            {'$set': update_data}
-        )
-        if result.matched_count == 0:
-            return jsonify({'error': 'User not found'}), 404
-    
-    return jsonify({'message': 'User updated successfully'})
+@app.post("/admin/notices", dependencies=[Depends(verify_admin)])
+async def create_notice(notice: Notice):
+    result = await db.notices.insert_one(notice.dict())
+    return {"status": "success", "notice_id": str(result.inserted_id)}
 
-@app.route('/users', methods=['GET'])
-@admin_required
-@handle_errors
-def get_users():
-    db = get_db()
-    users = list(db.users.find({'role': 'user'}, {'password': 0}))
-    return jsonify({'users': users})
+@app.post("/admin/polls", dependencies=[Depends(verify_admin)])
+async def create_poll(poll: Poll):
+    result = await db.polls.insert_one(poll.dict())
+    return {"status": "success", "poll_id": str(result.inserted_id)}
 
-# Tiffin management routes
-@app.route('/tiffins', methods=['POST'])
-@admin_required
-@handle_errors
-def create_tiffin():
-    data = request.get_json()
-    required_fields = ['name', 'description', 'price', 'date', 'time_slot', 'cancellation_time']
-    if not all(field in data for field in required_fields):
-        return jsonify({'error': 'Missing required fields'}), 400
-    
-    try:
-        tiffin = {
-            'name': data['name'],
-            'description': data['description'],
-            'price': float(data['price']),
-            'date': datetime.strptime(data['date'], '%Y-%m-%d'),
-            'time_slot': data['time_slot'],
-            'cancellation_time': datetime.strptime(data['cancellation_time'], '%Y-%m-%d %H:%M'),
-            'max_capacity': int(data.get('max_capacity', 0)),
-            'assigned_users': [],
-            'status': 'preparing',
-            'created_at': datetime.utcnow()
-        }
-    except ValueError:
-        return jsonify({'error': 'Invalid date format or numeric value'}), 400
-    
-    db = get_db()
-    db.tiffins.insert_one(tiffin)
-    return jsonify({'message': 'Tiffin created successfully'})
+# Additional Models
+class TiffinHistory(BaseModel):
+    user_id: str
+    tiffin_id: str
+    original_status: TiffinStatus
+    new_status: TiffinStatus
+    changed_at: datetime = Field(default_factory=lambda: datetime.now(IST))
 
-@app.route('/tiffins/<tiffin_id>/status', methods=['PUT'])
-@admin_required
-@handle_errors
-def update_tiffin_status(tiffin_id):
-    data = request.get_json()
-    if 'status' not in data:
-        return jsonify({'error': 'Status not provided'}), 400
-    
-    try:
-        db = get_db()
-        result = db.tiffins.update_one(
-            {'_id': ObjectId(tiffin_id)},
-            {'$set': {'status': data['status']}}
-        )
-        if result.matched_count == 0:
-            return jsonify({'error': 'Tiffin not found'}), 404
-    except Exception as e:
-        app.logger.error(f"Error updating tiffin status: {str(e)}")
-        return jsonify({'error': 'Invalid tiffin ID'}), 400
-    
-    return jsonify({'message': 'Tiffin status updated'})
+class UserStats(BaseModel):
+    total_tiffins: int
+    cancelled_tiffins: int
+    total_spent: float
+    active_since: datetime
 
-@app.route('/tiffins/upcoming', methods=['GET'])
-@auth_required
-@handle_errors
-def get_upcoming_tiffins():
-    db = get_db()
-    tiffins = list(db.tiffins.find({
-        'date': {'$gte': datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)}
-    }).sort('date', 1))
-    return jsonify({'tiffins': tiffins})
+class DashboardStats(BaseModel):
+    total_users: int
+    active_tiffins: int
+    today_deliveries: int
+    monthly_revenue: float
 
-@app.route('/tiffins/<tiffin_id>/cancel', methods=['POST'])
-@auth_required
-@handle_errors
-def cancel_tiffin(tiffin_id):
-    try:
-        db = get_db()
-        tiffin = db.tiffins.find_one({'_id': ObjectId(tiffin_id)})
-        if not tiffin:
-            return jsonify({'error': 'Tiffin not found'}), 404
-        
-        if datetime.utcnow() > tiffin['cancellation_time']:
-            return jsonify({'error': 'Cancellation time has passed'}), 400
-        
-        result = db.tiffins.update_one(
-            {'_id': ObjectId(tiffin_id)},
-            {'$pull': {'assigned_users': request.user['user_id']}}
-        )
-        if result.modified_count == 0:
-            return jsonify({'error': 'User not assigned to this tiffin'}), 400
-    except Exception as e:
-        app.logger.error(f"Error cancelling tiffin: {str(e)}")
-        return jsonify({'error': 'Invalid tiffin ID'}), 400
-    
-    return jsonify({'message': 'Tiffin cancelled successfully'})
+# User Endpoints (continued)
 
-# History routes
-@app.route('/history', methods=['GET'])
-@auth_required
-@handle_errors
-def get_history():
-    db = get_db()
-    history = list(db.tiffins.find({
-        'assigned_users': request.user['user_id'],
-        'date': {'$lt': datetime.utcnow()}
-    }).sort('date', -1))
-    return jsonify({'history': history})
+@app.get("/user/history")
+async def get_user_history(
+    user_id: str = Depends(verify_user),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+):
+    query = {"assigned_users": user_id}
+    if start_date:
+        query["date"] = {"$gte": start_date}
+    if end_date:
+        query["date"] = {"$lte": end_date}
+    
+    history = await db.tiffins.find(query).sort("date", -1).to_list(None)
+    return history
 
-# Invoice routes
-@app.route('/invoices', methods=['GET'])
-@auth_required
-@handle_errors
-def get_invoices():
-    user_id = request.user['user_id']
-    start_date = request.args.get('start_date')
-    end_date = request.args.get('end_date')
+@app.get("/user/invoices")
+async def get_user_invoices(user_id: str = Depends(verify_user)):
+    invoices = await db.invoices.find({"user_id": user_id}).to_list(None)
+    return invoices
+
+@app.post("/user/request-tiffin")
+async def request_special_tiffin(
+    request: TiffinRequest,
+    user_id: str = Depends(verify_user)
+):
+    request_dict = request.dict()
+    request_dict["status"] = "pending"
+    request_dict["created_at"] = datetime.now(IST)
+    result = await db.tiffin_requests.insert_one(request_dict)
+    return {"status": "success", "request_id": str(result.inserted_id)}
+
+@app.put("/user/profile")
+async def update_user_profile(
+    updates: Dict,
+    user_id: str = Depends(verify_user)
+):
+    allowed_updates = ["name", "address"]
+    update_data = {k: v for k, v in updates.items() if k in allowed_updates}
     
-    query = {'assigned_users': user_id}
-    if start_date and end_date:
-        try:
-            query['date'] = {
-                '$gte': datetime.strptime(start_date, '%Y-%m-%d'),
-                '$lte': datetime.strptime(end_date, '%Y-%m-%d')
-            }
-        except ValueError:
-            return jsonify({'error': 'Invalid date format'}), 400
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No valid updates provided")
     
-    db = get_db()
-    tiffins = list(db.tiffins.find(query))
-    total_amount = sum(tiffin['price'] for tiffin in tiffins)
-    
-    return jsonify({
-        'tiffins': tiffins,
-        'total_amount': total_amount
+    result = await db.users.update_one(
+        {"user_id": user_id},
+        {"$set": update_data}
+    )
+    return {"status": "success"}
+
+@app.post("/user/vote-poll/{poll_id}")
+async def vote_poll(
+    poll_id: str,
+    option_index: int,
+    user_id: str = Depends(verify_user)
+):
+    # Check if user already voted
+    existing_vote = await db.poll_votes.find_one({
+        "poll_id": ObjectId(poll_id),
+        "user_id": user_id
     })
-
-# Notice routes
-@app.route('/notices', methods=['POST'])
-@admin_required
-@handle_errors
-def create_notice():
-    data = request.get_json()
-    if not all(field in data for field in ['title', 'content']):
-        return jsonify({'error': 'Missing required fields'}), 400
     
-    notice = {
-        'title': data['title'],
-        'content': data['content'],
-        'created_at': datetime.utcnow()
-    }
-    db = get_db()
-    db.notices.insert_one(notice)
-    return jsonify({'message': 'Notice created successfully'})
-
-@app.route('/notices', methods=['GET'])
-@auth_required
-@handle_errors
-def get_notices():
-    db = get_db()
-    notices = list(db.notices.find().sort('created_at', -1))
-    return jsonify({'notices': notices})
-
-# Poll routes
-@app.route('/polls', methods=['POST'])
-@admin_required
-@handle_errors
-def create_poll():
-    data = request.get_json()
-    required_fields = ['question', 'options', 'start_date', 'end_date']
-    if not all(field in data for field in required_fields):
-        return jsonify({'error': 'Missing required fields'}), 400
+    if existing_vote:
+        raise HTTPException(status_code=400, detail="Already voted")
     
-    try:
-        poll = {
-            'question': data['question'],
-            'options': data['options'],
-            'start_date': datetime.strptime(data['start_date'], '%Y-%m-%d'),
-            'end_date': datetime.strptime(data['end_date'], '%Y-%m-%d'),
-            'votes': {option: [] for option in data['options']},
-            'created_at': datetime.utcnow()
-        }
-        
-        if poll['start_date'] > poll['end_date']:
-            return jsonify({'error': 'End date must be after start date'}), 400
-            
-        db = get_db()
-        db.polls.insert_one(poll)
-        return jsonify({'message': 'Poll created successfully'})
-    except ValueError:
-        return jsonify({'error': 'Invalid date format'}), 400
-
-@app.route('/polls/<poll_id>/vote', methods=['POST'])
-@auth_required
-@handle_errors
-def vote_poll(poll_id):
-    data = request.get_json()
-    if 'option' not in data:
-        return jsonify({'error': 'No option provided'}), 400
+    # Record vote
+    await db.poll_votes.insert_one({
+        "poll_id": ObjectId(poll_id),
+        "user_id": user_id,
+        "option_index": option_index,
+        "voted_at": datetime.now(IST)
+    })
     
-    try:
-        db = get_db()
-        poll = db.polls.find_one({'_id': ObjectId(poll_id)})
-        
-        if not poll:
-            return jsonify({'error': 'Poll not found'}), 404
-        
-        current_time = datetime.utcnow()
-        if current_time < poll['start_date']:
-            return jsonify({'error': 'Poll has not started yet'}), 400
-        if current_time > poll['end_date']:
-            return jsonify({'error': 'Poll has ended'}), 400
-            
-        if data['option'] not in poll['options']:
-            return jsonify({'error': 'Invalid option'}), 400
-        
-        # Remove previous vote if exists
-        for option in poll['votes']:
-            if request.user['user_id'] in poll['votes'][option]:
-                poll['votes'][option].remove(request.user['user_id'])
-        
-        # Add new vote
-        poll['votes'][data['option']].append(request.user['user_id'])
-        
-        db.polls.update_one(
-            {'_id': ObjectId(poll_id)},
-            {'$set': {'votes': poll['votes']}}
-        )
-        
-        return jsonify({'message': 'Vote recorded successfully'})
-    except Exception as e:
-        app.logger.error(f"Error recording vote: {str(e)}")
-        return jsonify({'error': 'Invalid poll ID'}), 400
-
-@app.route('/polls/active', methods=['GET'])
-@auth_required
-@handle_errors
-def get_active_polls():
-    db = get_db()
-    current_time = datetime.utcnow()
-    polls = list(db.polls.find({
-        'end_date': {'$gte': current_time},
-        'start_date': {'$lte': current_time}
-    }).sort('end_date', 1))
-    return jsonify({'polls': polls})
-
-# Special requests routes
-@app.route('/requests', methods=['POST'])
-@auth_required
-@handle_errors
-def create_request():
-    data = request.get_json()
-    if not all(field in data for field in ['description', 'date']):
-        return jsonify({'error': 'Missing required fields'}), 400
+    # Update poll option count
+    await db.polls.update_one(
+        {"_id": ObjectId(poll_id)},
+        {"$inc": {f"options.{option_index}.votes": 1}}
+    )
     
-    try:
-        special_request = {
-            'user_id': request.user['user_id'],
-            'description': data['description'],
-            'date': datetime.strptime(data['date'], '%Y-%m-%d'),
-            'status': 'pending',
-            'created_at': datetime.utcnow()
-        }
+    return {"status": "success"}
+
+# Admin Endpoints (continued)
+
+@app.get("/admin/dashboard", dependencies=[Depends(verify_admin)])
+async def get_dashboard_stats():
+    today = datetime.now(IST).strftime("%Y-%m-%d")
+    
+    stats = DashboardStats(
+        total_users=await db.users.count_documents({"active": True}),
+        active_tiffins=await db.tiffins.count_documents({
+            "date": today,
+            "status": {"$nin": [TiffinStatus.DELIVERED, TiffinStatus.CANCELLED]}
+        }),
+        today_deliveries=await db.tiffins.count_documents({
+            "date": today,
+            "status": TiffinStatus.DELIVERED
+        }),
+        monthly_revenue=await calculate_monthly_revenue()
+    )
+    return stats
+
+@app.get("/admin/user/{user_id}/stats", dependencies=[Depends(verify_admin)])
+async def get_user_stats(user_id: str):
+    user = await db.users.find_one({"user_id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    tiffins = await db.tiffins.find({"assigned_users": user_id}).to_list(None)
+    
+    stats = UserStats(
+        total_tiffins=len(tiffins),
+        cancelled_tiffins=sum(1 for t in tiffins if t["status"] == TiffinStatus.CANCELLED),
+        total_spent=sum(t["price"] for t in tiffins if t["status"] != TiffinStatus.CANCELLED),
+        active_since=user["created_at"]
+    )
+    return stats
+
+@app.post("/admin/generate-invoices", dependencies=[Depends(verify_admin)])
+async def generate_invoices(start_date: str, end_date: str):
+    users = await db.users.find({"active": True}).to_list(None)
+    generated_invoices = []
+    
+    for user in users:
+        tiffins = await db.tiffins.find({
+            "assigned_users": user["user_id"],
+            "date": {"$gte": start_date, "$lte": end_date},
+            "status": {"$ne": TiffinStatus.CANCELLED}
+        }).to_list(None)
         
-        db = get_db()
-        db.special_requests.insert_one(special_request)
-        return jsonify({'message': 'Request created successfully'})
-    except ValueError:
-        return jsonify({'error': 'Invalid date format'}), 400
-
-@app.route('/requests', methods=['GET'])
-@admin_required
-@handle_errors
-def get_requests():
-    db = get_db()
-    requests = list(db.special_requests.find().sort('created_at', -1))
-    return jsonify({'requests': requests})
-
-# Health check endpoint
-@app.route('/health', methods=['GET'])
-def health_check():
-    try:
-        db = get_db()
-        db.admin.command('ping')
-        return jsonify({
-            'status': 'healthy',
-            'database': 'connected',
-            'timestamp': datetime.utcnow()
-        })
-    except Exception as e:
-        app.logger.error(f"Health check failed: {str(e)}")
-        return jsonify({
-            'status': 'unhealthy',
-            'database': 'disconnected',
-            'timestamp': datetime.utcnow()
-        }), 500
-
-# Background scheduler setup
-def create_scheduler():
-    scheduler = BackgroundScheduler()
+        if tiffins:
+            invoice = Invoice(
+                user_id=user["user_id"],
+                start_date=start_date,
+                end_date=end_date,
+                tiffins=[str(t["_id"]) for t in tiffins],
+                total_amount=sum(t["price"] for t in tiffins)
+            )
+            result = await db.invoices.insert_one(invoice.dict())
+            generated_invoices.append(str(result.inserted_id))
     
-    def ping_server():
-        try:
-            requests.get('https://tiffintreats-20mb.onrender.com/health', timeout=5)
-            app.logger.info("Keep-alive ping successful")
-        except Exception as e:
-            app.logger.error(f"Keep-alive ping failed: {str(e)}")
+    return {"status": "success", "generated_invoices": len(generated_invoices)}
+
+@app.post("/admin/batch-tiffins", dependencies=[Depends(verify_admin)])
+async def create_batch_tiffins(
+    date: str,
+    time: TiffinTime,
+    base_tiffin: TiffinCreate,
+    user_groups: List[List[str]]
+):
+    created_tiffins = []
     
-    scheduler.add_job(ping_server, 'interval', minutes=10)
-    scheduler.start()
-    app.logger.info("Background scheduler started")
-    return scheduler
-
-# Graceful shutdown handler
-def shutdown_handler(signum, frame):
-    app.logger.info("Received shutdown signal")
-    scheduler.shutdown()
-    app.logger.info("Scheduler shutdown complete")
-    exit(0)
-
-# Initialize scheduler
-scheduler = create_scheduler()
-
-if __name__ == '__main__':
-    # Register shutdown handler
-    import signal
-    signal.signal(signal.SIGTERM, shutdown_handler)
-    signal.signal(signal.SIGINT, shutdown_handler)
+    for user_group in user_groups:
+        tiffin = base_tiffin.copy()
+        tiffin.assigned_users = user_group
+        tiffin.date = date
+        tiffin.time = time
+        
+        result = await db.tiffins.insert_one(tiffin.dict())
+        created_tiffins.append(str(result.inserted_id))
     
-    # Start the application
-    port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    return {"status": "success", "created_tiffins": created_tiffins}
+
+@app.delete("/admin/tiffins/{tiffin_id}", dependencies=[Depends(verify_admin)])
+async def delete_tiffin(tiffin_id: str):
+    result = await db.tiffins.delete_one({"_id": ObjectId(tiffin_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Tiffin not found")
+    return {"status": "success"}
+
+# Utility Functions
+async def calculate_monthly_revenue():
+    start_date = datetime.now(IST).replace(day=1).strftime("%Y-%m-%d")
+    end_date = datetime.now(IST).strftime("%Y-%m-%d")
+    
+    tiffins = await db.tiffins.find({
+        "date": {"$gte": start_date, "$lte": end_date},
+        "status": {"$ne": TiffinStatus.CANCELLED}
+    }).to_list(None)
+    
+    return sum(t["price"] for t in tiffins)
+
+# Background Tasks
+async def cleanup_old_data():
+    thirty_days_ago = datetime.now(IST) - timedelta(days=30)
+    await db.notices.delete_many({"expires_at": {"$lt": thirty_days_ago}})
+    await db.polls.update_many(
+        {"end_date": {"$lt": thirty_days_ago}},
+        {"$set": {"active": False}}
+    )
+
+# Startup Event
+@app.on_event("startup")
+async def startup_event():
+    # Create indexes
+    await db.users.create_index("user_id", unique=True)
+    await db.tiffins.create_index([("date", 1), ("time", 1)])
+    await db.poll_votes.create_index([("poll_id", 1), ("user_id", 1)], unique=True)
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=False,
+        workers=4
+    )
