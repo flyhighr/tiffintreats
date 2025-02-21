@@ -97,15 +97,23 @@ def login():
         return '', 200
         
     try:
+        print("Login attempt received")  # Debug logging
         data = request.json
+        print(f"Login data: {data}")  # Debug logging
+        
         if not data:
             return jsonify({'message': 'No data provided'}), 400
             
         user_id = data.get('userId')
         password = data.get('password')
+        
+        print(f"Attempting login for user: {user_id}")  # Debug logging
 
         if not user_id or not password:
             return jsonify({'message': 'Missing credentials'}), 400
+
+        # Create default admin if not exists
+        create_default_admin()
 
         user = db.users.find_one({
             '$or': [
@@ -115,9 +123,11 @@ def login():
         })
 
         if not user:
+            print(f"User not found: {user_id}")  # Debug logging
             return jsonify({'message': 'User not found'}), 404
 
         if not bcrypt.checkpw(password.encode('utf-8'), user['password']):
+            print("Invalid password")  # Debug logging
             return jsonify({'message': 'Invalid password'}), 401
 
         token = jwt.encode({
@@ -126,6 +136,7 @@ def login():
             'exp': datetime.utcnow() + timedelta(days=1)
         }, JWT_SECRET_KEY)
 
+        print(f"Login successful for user: {user_id}")  # Debug logging
         return jsonify({
             'token': token,
             'role': user['role'],
@@ -133,9 +144,8 @@ def login():
         }), 200
         
     except Exception as e:
-        print(f"Login error: {str(e)}")  # Add logging
-        return jsonify({'message': 'Internal server error'}), 500
-    
+        print(f"Login error: {str(e)}")  # Error logging
+        return jsonify({'message': f'Internal server error: {str(e)}'}), 500
 # Admin user management routes
 @app.route('/admin/users', methods=['POST'])
 @admin_required
@@ -521,19 +531,33 @@ def manage_settings(current_user):
 
 # Remove app.run() from create_default_admin function and place it at the bottom
 def create_default_admin():
-    if not db.users.find_one({'role': 'admin'}):
-        admin_user = {
-            'userId': ADMIN_ID,  # Use the environment variable
-            'phone': ADMIN_PHONE,
-            'password': bcrypt.hashpw(ADMIN_PASSWORD.encode('utf-8'), bcrypt.gensalt()),
-            'name': 'Admin',
-            'role': 'admin',
-            'created_at': datetime.utcnow()
-        }
-        db.users.insert_one(admin_user)
+    try:
+        # Check if admin exists
+        admin = db.users.find_one({'role': 'admin'})
+        if not admin:
+            print("Creating default admin account...")  # Debug logging
+            admin_user = {
+                'userId': ADMIN_ID,
+                'phone': ADMIN_PHONE,
+                'password': bcrypt.hashpw(ADMIN_PASSWORD.encode('utf-8'), bcrypt.gensalt()),
+                'name': 'Admin',
+                'role': 'admin',
+                'created_at': datetime.utcnow()
+            }
+            db.users.insert_one(admin_user)
+            print("Default admin account created successfully")  # Debug logging
+        else:
+            print("Admin account already exists")  # Debug logging
+    except Exception as e:
+        print(f"Error creating admin account: {str(e)}")  # Error logging
+
 
 if __name__ == '__main__':
+    print("Starting application...")
+    print(f"Admin ID: {ADMIN_ID}")  # Debug logging
+    print(f"Admin Phone: {ADMIN_PHONE}")  # Debug logging
     create_default_admin()
+    
     # Create indexes
     db.users.create_index('userId', unique=True)
     db.users.create_index('phone', unique=True)
