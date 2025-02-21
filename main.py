@@ -145,17 +145,12 @@ def login():
     try:
         data = request.get_json()
         
-        # Log the received data for debugging
-        app.logger.debug(f"Received login data: {data}")
-        
-        phone = data.get('phone')
-        password = data.get('password')
-        
-        if not phone or not password:
+        # Validate input
+        if not data or 'phone' not in data or 'password' not in data:
             return jsonify({'error': 'Missing phone or password'}), 400
             
-        # Ensure phone is string
-        phone = str(phone)
+        phone = str(data['phone'])
+        password = str(data['password'])
         
         app.logger.info(f"Login attempt for phone: {phone}")
         
@@ -163,8 +158,12 @@ def login():
         user = db.users.find_one({'phone': phone})
         
         if not user:
+            app.logger.warning(f"Login failed: User not found for phone {phone}")
             return jsonify({'error': 'Invalid credentials'}), 401
 
+        # Debug logging
+        app.logger.debug(f"Attempting password verification for user: {phone}")
+        
         if bcrypt.checkpw(password.encode('utf-8'), user['password']):
             token = jwt.encode({
                 'user_id': str(user['_id']),
@@ -178,6 +177,7 @@ def login():
                 'user_id': str(user['_id'])
             })
         else:
+            app.logger.warning(f"Login failed: Invalid password for phone {phone}")
             return jsonify({'error': 'Invalid credentials'}), 401
 
     except Exception as e:
