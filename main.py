@@ -153,10 +153,10 @@ def login():
         user_id = data.get('user_id')
         password = data.get('password')
         
-        # Log the incoming request (remove in production)
         app.logger.info(f"Login attempt for user_id: {user_id}")
         
         if not user_id or not password:
+            app.logger.warning("Missing credentials")
             return jsonify({'error': 'Missing credentials'}), 400
         
         db = get_db()
@@ -165,16 +165,21 @@ def login():
         if not user:
             app.logger.warning(f"User not found: {user_id}")
             return jsonify({'error': 'Invalid credentials'}), 401
-        
-        # Convert password to bytes if it's not already
-        if isinstance(password, str):
-            password = password.encode('utf-8')
-        
-        # Convert stored password to bytes if it's not already
+
+        # Ensure password is string and encode it
+        if not isinstance(password, str):
+            password = str(password)
+        password = password.encode('utf-8')
+
+        # Ensure stored password is bytes
         stored_password = user['password']
         if isinstance(stored_password, str):
             stored_password = stored_password.encode('utf-8')
         
+        # Debug logging
+        app.logger.debug(f"Password type: {type(password)}")
+        app.logger.debug(f"Stored password type: {type(stored_password)}")
+
         if not bcrypt.checkpw(password, stored_password):
             app.logger.warning(f"Invalid password for user: {user_id}")
             return jsonify({'error': 'Invalid credentials'}), 401
@@ -187,7 +192,7 @@ def login():
         
         app.logger.info(f"Successful login for user: {user_id}")
         
-        # If token is bytes, decode it to string
+        # Ensure token is string
         if isinstance(token, bytes):
             token = token.decode('utf-8')
         
@@ -199,34 +204,43 @@ def login():
 
     except Exception as e:
         app.logger.error(f"Login error: {str(e)}")
-        return jsonify({'error': 'Login failed'}), 500
+        return jsonify({'error': str(e)}), 500  # Return actual error for debugging
 
 # User management routes
 @app.route('/users', methods=['POST'])
 @admin_required
 @handle_errors
 def create_user():
-    data = request.get_json()
-    required_fields = ['user_id', 'phone', 'password']
-    if not all(field in data for field in required_fields):
-        return jsonify({'error': 'Missing required fields'}), 400
+    try:
+        data = request.get_json()
+        required_fields = ['user_id', 'phone', 'password']
+        if not all(field in data for field in required_fields):
+            return jsonify({'error': 'Missing required fields'}), 400
+        
+        db = get_db()
+        if db.users.find_one({'user_id': data['user_id']}):
+            return jsonify({'error': 'User ID already exists'}), 400
+        
+        # Ensure password is string and encode it
+        password = str(data['password']).encode('utf-8')
+        hashed_password = bcrypt.hashpw(password, bcrypt.gensalt())
+        
+        user = {
+            'user_id': data['user_id'],
+            'phone': data['phone'],
+            'password': hashed_password,
+            'role': 'user',
+            'delivery_address': data.get('delivery_address', ''),
+            'created_at': datetime.utcnow()
+        }
+        
+        db.users.insert_one(user)
+        app.logger.info(f"User created successfully: {data['user_id']}")
+        return jsonify({'message': 'User created successfully'})
     
-    db = get_db()
-    if db.users.find_one({'user_id': data['user_id']}):
-        return jsonify({'error': 'User ID already exists'}), 400
-    
-    hashed_password = bcrypt.hashpw(data['password'].encode('utf-8'), bcrypt.gensalt())
-    user = {
-        'user_id': data['user_id'],
-        'phone': data['phone'],
-        'password': hashed_password,
-        'role': 'user',
-        'delivery_address': data.get('delivery_address', ''),
-        'created_at': datetime.utcnow()
-    }
-    
-    db.users.insert_one(user)
-    return jsonify({'message': 'User created successfully'})
+    except Exception as e:
+        app.logger.error(f"Error creating user: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/users/<user_id>', methods=['PUT'])
 @auth_required
