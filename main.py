@@ -3,7 +3,7 @@ from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from pymongo import MongoClient, ASCENDING
 from pymongo.server_api import ServerApi
 import os
@@ -177,6 +177,11 @@ async def health_check():
         return {"status": "healthy", "timestamp": datetime.now(IST)}
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
+
+# Root Endpoint
+@app.get("/")
+async def root():
+    return {"message": "Welcome to TiffinTreats API", "docs": "/docs"}
 
 # User Endpoints
 @app.post("/auth/login")
@@ -443,6 +448,35 @@ async def create_notice(notice: Notice):
 async def create_poll(poll: Poll):
     result = db.polls.insert_one(poll.dict())
     return {"status": "success", "poll_id": str(result.inserted_id)}
+
+# Add the new endpoints to the existing code
+
+# Fetch Notices for Users
+@app.get("/user/notices")
+async def get_user_notices(user_id: str = Depends(verify_user)):
+    notices = list(db.notices.find().sort("created_at", -1))
+    for notice in notices:
+        notice["_id"] = str(notice["_id"])
+    return notices
+
+# Manage Addresses for Admins
+@app.put("/admin/users/{user_id}/address", dependencies=[Depends(verify_admin)])
+async def update_user_address(user_id: str, address: str):
+    result = db.users.update_one(
+        {"user_id": user_id},
+        {"$set": {"address": address}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"status": "success"}
+
+# View All Histories for Admins
+@app.get("/admin/histories", dependencies=[Depends(verify_admin)])
+async def get_all_histories():
+    histories = list(db.tiffins.find().sort("date", -1))
+    for history in histories:
+        history["_id"] = str(history["_id"])
+    return histories
 
 # Background Tasks
 async def cleanup_old_data():
