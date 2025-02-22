@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Security, BackgroundTasks
+rom fastapi import FastAPI, HTTPException, Depends, Security, BackgroundTasks
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, EmailStr
@@ -13,6 +13,8 @@ import pytz
 from enum import Enum
 from bson import ObjectId
 from passlib.context import CryptContext
+import asyncio
+import httpx
 
 # Load environment variables
 load_dotenv()
@@ -177,7 +179,19 @@ async def health_check():
         return {"status": "healthy", "timestamp": datetime.now(IST)}
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
+        
 
+APP_URL = os.getenv("APP_URL", "https://tiffintreats-20mb.onrender.com")
+PING_INTERVAL = 14 * 60 
+async def keep_alive():
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                response = await client.get(f"{APP_URL}/health")
+                print(f"Keep-alive ping sent. Status: {response.status_code}")
+            except Exception as e:
+                print(f"Keep-alive ping failed: {e}")
+            await asyncio.sleep(PING_INTERVAL)
 # Root Endpoint
 @app.get("/")
 async def root():
@@ -503,7 +517,10 @@ async def startup_event():
     # Schedule background tasks
     background_tasks = BackgroundTasks()
     background_tasks.add_task(cleanup_old_data)
-
+    
+    # Start the keep-alive task
+    asyncio.create_task(keep_alive())
+    
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",
