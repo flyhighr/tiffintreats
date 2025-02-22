@@ -1,4 +1,4 @@
-rom fastapi import FastAPI, HTTPException, Depends, Security, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, Security, BackgroundTasks
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, EmailStr
