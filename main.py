@@ -16,13 +16,12 @@ from passlib.context import CryptContext
 import asyncio
 import httpx
 
-# Load environment variables
+# env
 load_dotenv()
 
-# Initialize FastAPI
 app = FastAPI(title="TiffinTreats API")
 
-# CORS Configuration
+# CORS Git-contig
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,23 +30,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database Configuration
 MONGODB_URL = os.getenv("MONGODB_URL")
 client = MongoClient(MONGODB_URL, server_api=ServerApi('1'))
 db = client.tiffintreats
 
-# Security Configuration
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 api_key_header = APIKeyHeader(name="X-API-Key")
 
-# Admin Configuration
 ADMIN_IDS = os.getenv("ADMIN_IDS", "").split(",")
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
 
-# Timezone Configuration
 IST = pytz.timezone('Asia/Kolkata')
 
-# Enums
 class TiffinTime(str, Enum):
     MORNING = "morning"
     AFTERNOON = "afternoon"
@@ -61,7 +55,6 @@ class TiffinStatus(str, Enum):
     DELIVERED = "delivered"
     CANCELLED = "cancelled"
 
-# Models
 class UserBase(BaseModel):
     user_id: str
     name: str
@@ -133,7 +126,7 @@ class Invoice(BaseModel):
     paid: bool = False
     generated_at: datetime = Field(default_factory=lambda: datetime.now(IST))
 
-# Authentication Functions
+# Auth
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
@@ -151,7 +144,6 @@ async def verify_user(api_key: str = Depends(api_key_header)):
         raise HTTPException(status_code=401, detail="Invalid API key")
     return user["user_id"]
 
-# Utility Functions
 def parse_time(time_str: str) -> datetime:
     return datetime.strptime(time_str, "%H:%M").replace(tzinfo=IST)
 
@@ -171,7 +163,6 @@ async def calculate_monthly_revenue():
     
     return sum(t["price"] for t in tiffins)
 
-# Health Check Endpoint
 @app.get("/health")
 async def health_check():
     try:
@@ -192,12 +183,11 @@ async def keep_alive():
             except Exception as e:
                 print(f"Keep-alive ping failed: {e}")
             await asyncio.sleep(PING_INTERVAL)
-# Root Endpoint
+
 @app.get("/")
 async def root():
     return {"message": "Welcome to TiffinTreats API", "docs": "/docs"}
 
-# User Endpoints
 @app.post("/auth/login")
 async def login(user_id: str, password: str):
     user = db.users.find_one({"user_id": user_id})
@@ -329,7 +319,6 @@ async def vote_poll(
     
     return {"status": "success"}
 
-# Admin Endpoints
 @app.post("/admin/users", dependencies=[Depends(verify_admin)])
 async def create_user(user: UserCreate):
     existing_user = db.users.find_one({"user_id": user.user_id})
@@ -463,9 +452,6 @@ async def create_poll(poll: Poll):
     result = db.polls.insert_one(poll.dict())
     return {"status": "success", "poll_id": str(result.inserted_id)}
 
-# Add the new endpoints to the existing code
-
-# Fetch Notices for Users
 @app.get("/user/notices")
 async def get_user_notices(user_id: str = Depends(verify_user)):
     notices = list(db.notices.find().sort("created_at", -1))
@@ -473,7 +459,6 @@ async def get_user_notices(user_id: str = Depends(verify_user)):
         notice["_id"] = str(notice["_id"])
     return notices
 
-# Manage Addresses for Admins
 @app.put("/admin/users/{user_id}/address", dependencies=[Depends(verify_admin)])
 async def update_user_address(user_id: str, address: str):
     result = db.users.update_one(
@@ -484,7 +469,6 @@ async def update_user_address(user_id: str, address: str):
         raise HTTPException(status_code=404, detail="User not found")
     return {"status": "success"}
 
-# View All Histories for Admins
 @app.get("/admin/histories", dependencies=[Depends(verify_admin)])
 async def get_all_histories():
     histories = list(db.tiffins.find().sort("date", -1))
@@ -492,7 +476,6 @@ async def get_all_histories():
         history["_id"] = str(history["_id"])
     return histories
 
-# Background Tasks
 async def cleanup_old_data():
     thirty_days_ago = datetime.now(IST) - timedelta(days=30)
     db.notices.delete_many({"expires_at": {"$lt": thirty_days_ago}})
@@ -501,10 +484,9 @@ async def cleanup_old_data():
         {"$set": {"active": False}}
     )
 
-# Startup Event
 @app.on_event("startup")
 async def startup_event():
-    # Create indexes
+    # index on uid
     db.users.create_index([("user_id", ASCENDING)], unique=True)
     db.users.create_index([("email", ASCENDING)], unique=True)
     db.users.create_index([("api_key", ASCENDING)], unique=True)
@@ -514,11 +496,10 @@ async def startup_event():
         unique=True
     )
     
-    # Schedule background tasks
+    
     background_tasks = BackgroundTasks()
     background_tasks.add_task(cleanup_old_data)
-    
-    # Start the keep-alive task
+
     asyncio.create_task(keep_alive())
     
 if __name__ == "__main__":
