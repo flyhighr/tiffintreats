@@ -207,8 +207,6 @@ async def root():
 @app.get("/auth/login")
 @app.post("/auth/login")
 async def login(user_id: str, password: str):
-    # Your login logic...
-async def login(user_id: str, password: str):
     # Check for admin login
     if user_id == ADMIN_ID and password == ADMIN_PASSWORD:
         return {
