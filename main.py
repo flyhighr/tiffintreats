@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, Security, BackgroundTasks
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, EmailStr
-from typing import List, Optional, Dict, Union
+from typing import List, Optional, Dict
 from datetime import datetime, timedelta
 from pymongo import MongoClient, ASCENDING
 from pymongo.server_api import ServerApi
@@ -131,6 +131,27 @@ class Invoice(BaseModel):
     generated_at: datetime = Field(default_factory=lambda: datetime.now(IST))
 
 # Authentication Functions
+async def verify_admin(api_key: str = Depends(api_key_header)):
+    if api_key != ADMIN_API_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid admin API key"
+        )
+    return True
+
+async def verify_user(api_key: str = Depends(api_key_header)):
+    # Check if it's admin first
+    if api_key == ADMIN_API_KEY:
+        return ADMIN_ID
+        
+    user = db.users.find_one({"api_key": api_key})
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API key"
+        )
+    return user["user_id"]
+
 async def verify_api_key(api_key: str = Depends(api_key_header)):
     """Verify API key for both admin and regular users"""
     # Check if it's the admin API key
@@ -146,38 +167,28 @@ async def verify_api_key(api_key: str = Depends(api_key_header)):
         )
     return {"user_id": user["user_id"], "is_admin": False}
 
-async def verify_admin(api_key: str = Depends(api_key_header)):
-    """Verify if the API key belongs to admin"""
-    if api_key != ADMIN_API_KEY:
-        raise HTTPException(
-            status_code=403,
-            detail="Admin access required"
-        )
-    return {"user_id": ADMIN_ID, "is_admin": True}
-
-async def verify_user_or_admin(auth: dict = Depends(verify_api_key)):
-    """Return user_id for either admin or regular user"""
-    return auth["user_id"]
-
 # Utility Functions
 def generate_api_key() -> str:
     return os.urandom(24).hex()
 
-def parse_date_time(date_str: str, time_str: str) -> datetime:
-    """Parse date and time strings into a datetime object with IST timezone"""
+def is_valid_object_id(id_str: str) -> bool:
+    """Check if string is a valid MongoDB ObjectId"""
     try:
-        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-        time_obj = datetime.strptime(time_str, "%H:%M").time()
-        combined = datetime.combine(date_obj.date(), time_obj)
-        return IST.localize(combined)
-    except ValueError as e:
+        ObjectId(id_str)
+        return True
+    except Exception:
+        return False
+
+def parse_time(time_str: str) -> datetime:
+    try:
+        return datetime.strptime(time_str, "%H:%M").replace(tzinfo=IST)
+    except ValueError:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid date or time format: {str(e)}"
+            detail="Invalid time format. Use HH:MM"
         )
 
 async def is_cancellation_allowed(tiffin: dict) -> bool:
-    """Check if tiffin can be cancelled based on cancellation time"""
     try:
         current_time = datetime.now(IST)
         tiffin_date = datetime.strptime(tiffin["date"], "%Y-%m-%d").date()
@@ -189,14 +200,6 @@ async def is_cancellation_allowed(tiffin: dict) -> bool:
         return current_time < cancellation_datetime
     except Exception:
         # If any error occurs, default to not allowing cancellation
-        return False
-
-def is_valid_object_id(id_str: str) -> bool:
-    """Check if a string is a valid MongoDB ObjectId"""
-    try:
-        ObjectId(id_str)
-        return True
-    except Exception:
         return False
 
 # Health Check
@@ -211,7 +214,7 @@ async def health_check():
     except Exception as e:
         raise HTTPException(
             status_code=503,
-            detail=f"Database connection failed: {str(e)}"
+            detail=str(e)
         )
 
 # Keep Alive Function
@@ -271,7 +274,7 @@ async def login(user_id: str, password: str):
 
 # User Management Endpoints
 @app.post("/admin/users")
-async def create_user(user: UserCreate, auth: dict = Depends(verify_admin)):
+async def create_user(user: UserCreate, _: bool = Depends(verify_admin)):
     # Check if user already exists
     if db.users.find_one({"user_id": user.user_id}):
         raise HTTPException(
@@ -304,7 +307,7 @@ async def create_user(user: UserCreate, auth: dict = Depends(verify_admin)):
         )
 
 @app.get("/admin/users")
-async def get_all_users(auth: dict = Depends(verify_admin)):
+async def get_all_users(_: bool = Depends(verify_admin)):
     try:
         users = list(db.users.find({}, {"password": 0, "api_key": 0}))
         for user in users:
@@ -317,7 +320,7 @@ async def get_all_users(auth: dict = Depends(verify_admin)):
         )
 
 @app.get("/admin/users/{user_id}")
-async def get_user(user_id: str, auth: dict = Depends(verify_admin)):
+async def get_user(user_id: str, _: bool = Depends(verify_admin)):
     user = db.users.find_one({"user_id": user_id}, {"password": 0, "api_key": 0})
     if not user:
         raise HTTPException(
@@ -331,7 +334,7 @@ async def get_user(user_id: str, auth: dict = Depends(verify_admin)):
 async def update_user(
     user_id: str,
     updates: Dict,
-    auth: dict = Depends(verify_admin)
+    _: bool = Depends(verify_admin)
 ):
     allowed_updates = {"name", "email", "address", "active"}
     update_data = {k: v for k, v in updates.items() if k in allowed_updates}
@@ -368,7 +371,7 @@ async def update_user(
     return {"status": "success"}
 
 @app.delete("/admin/users/{user_id}")
-async def delete_user(user_id: str, auth: dict = Depends(verify_admin)):
+async def delete_user(user_id: str, _: bool = Depends(verify_admin)):
     # Don't allow deleting admin
     if user_id == ADMIN_ID:
         raise HTTPException(
@@ -393,17 +396,16 @@ async def delete_user(user_id: str, auth: dict = Depends(verify_admin)):
 
 # User Profile Endpoints
 @app.get("/user/profile")
-async def get_user_profile(auth: dict = Depends(verify_api_key)):
-    user_id = auth["user_id"]
-    
+async def get_user_profile(user_id: str = Depends(verify_user)):
     # If admin is checking profile, return admin info
-    if auth["is_admin"]:
+    if user_id == ADMIN_ID:
         return {
             "user_id": ADMIN_ID,
             "name": "Administrator",
             "email": "admin@tiffintreats.com",
             "address": "Admin Office",
-            "role": "admin"
+            "active": True,
+            "created_at": datetime.now(IST).isoformat()
         }
     
     user = db.users.find_one(
@@ -416,18 +418,15 @@ async def get_user_profile(auth: dict = Depends(verify_api_key)):
             detail="User not found"
         )
     user["_id"] = str(user["_id"])
-    user["role"] = "user"
     return user
 
 @app.put("/user/profile")
 async def update_user_profile(
     updates: Dict,
-    auth: dict = Depends(verify_api_key)
+    user_id: str = Depends(verify_user)
 ):
-    user_id = auth["user_id"]
-    
     # Admin can't update profile through this endpoint
-    if auth["is_admin"]:
+    if user_id == ADMIN_ID:
         raise HTTPException(
             status_code=400,
             detail="Admin profile cannot be updated through this endpoint"
@@ -454,7 +453,7 @@ async def update_user_profile(
                 detail="Email already registered"
             )
     
-        result = db.users.update_one(
+    result = db.users.update_one(
         {"user_id": user_id},
         {"$set": update_data}
     )
@@ -471,12 +470,10 @@ async def update_user_profile(
 async def change_password(
     old_password: str,
     new_password: str,
-    auth: dict = Depends(verify_api_key)
+    user_id: str = Depends(verify_user)
 ):
-    user_id = auth["user_id"]
-    
-    # Admin can't change password through this endpoint
-    if auth["is_admin"]:
+        # Admin can't change password through this endpoint
+    if user_id == ADMIN_ID:
         raise HTTPException(
             status_code=400,
             detail="Admin password cannot be changed through this endpoint"
@@ -498,7 +495,7 @@ async def change_password(
 
 # Tiffin Management Endpoints
 @app.post("/admin/tiffins")
-async def create_tiffin(tiffin: TiffinCreate, auth: dict = Depends(verify_admin)):
+async def create_tiffin(tiffin: TiffinCreate, _: bool = Depends(verify_admin)):
     try:
         # Validate assigned users exist
         for user_id in tiffin.assigned_users:
@@ -512,19 +509,11 @@ async def create_tiffin(tiffin: TiffinCreate, auth: dict = Depends(verify_admin)
         try:
             datetime.strptime(tiffin.cancellation_time, "%H:%M")
             datetime.strptime(tiffin.delivery_time, "%H:%M")
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid time format. Use HH:MM for cancellation_time and delivery_time"
-            )
-        
-        # Validate date format
-        try:
             datetime.strptime(tiffin.date, "%Y-%m-%d")
         except ValueError:
             raise HTTPException(
                 status_code=400,
-                detail="Invalid date format. Use YYYY-MM-DD"
+                detail="Invalid date or time format. Use YYYY-MM-DD for date and HH:MM for times"
             )
         
         # Create tiffin document
@@ -553,7 +542,7 @@ async def create_batch_tiffins(
     time: TiffinTime,
     base_tiffin: TiffinCreate,
     user_groups: List[List[str]],
-    auth: dict = Depends(verify_admin)
+    _: bool = Depends(verify_admin)
 ):
     created_tiffins = []
     
@@ -616,7 +605,7 @@ async def create_batch_tiffins(
 async def get_all_tiffins(
     date: Optional[str] = None,
     status: Optional[TiffinStatus] = None,
-    auth: dict = Depends(verify_admin)
+    _: bool = Depends(verify_admin)
 ):
     try:
         query = {}
@@ -646,107 +635,11 @@ async def get_all_tiffins(
             detail=f"Failed to fetch tiffins: {str(e)}"
         )
 
-@app.get("/admin/tiffins/{tiffin_id}")
-async def get_tiffin_by_id(tiffin_id: str, auth: dict = Depends(verify_admin)):
-    try:
-        if not is_valid_object_id(tiffin_id):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid tiffin ID format"
-            )
-            
-        tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
-        if not tiffin:
-            raise HTTPException(
-                status_code=404,
-                detail="Tiffin not found"
-            )
-        
-        tiffin["_id"] = str(tiffin["_id"])
-        return tiffin
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch tiffin: {str(e)}"
-        )
-
-@app.put("/admin/tiffins/{tiffin_id}")
-async def update_tiffin(
-    tiffin_id: str,
-    updates: Dict,
-    auth: dict = Depends(verify_admin)
-):
-    try:
-        if not is_valid_object_id(tiffin_id):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid tiffin ID format"
-            )
-            
-        # Check if tiffin exists
-        tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
-        if not tiffin:
-            raise HTTPException(
-                status_code=404,
-                detail="Tiffin not found"
-            )
-        
-        # Validate time formats if they are being updated
-        if "cancellation_time" in updates:
-            try:
-                datetime.strptime(updates["cancellation_time"], "%H:%M")
-            except ValueError:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid cancellation_time format. Use HH:MM"
-                )
-                
-        if "delivery_time" in updates:
-            try:
-                datetime.strptime(updates["delivery_time"], "%H:%M")
-            except ValueError:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid delivery_time format. Use HH:MM"
-                )
-        
-        # Validate date format if it's being updated
-        if "date" in updates:
-            try:
-                datetime.strptime(updates["date"], "%Y-%m-%d")
-            except ValueError:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid date format. Use YYYY-MM-DD"
-                )
-        
-        # Add updated_at timestamp
-        updates["updated_at"] = datetime.now(IST)
-        
-        result = db.tiffins.update_one(
-            {"_id": ObjectId(tiffin_id)},
-            {"$set": updates}
-        )
-        
-        if result.modified_count == 0:
-            return {"status": "success", "message": "No changes were made"}
-        
-        return {"status": "success"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update tiffin: {str(e)}"
-        )
-
 @app.put("/admin/tiffins/{tiffin_id}/status")
 async def update_tiffin_status(
     tiffin_id: str,
     status: TiffinStatus,
-    auth: dict = Depends(verify_admin)
+    _: bool = Depends(verify_admin)
 ):
     try:
         if not is_valid_object_id(tiffin_id):
@@ -781,7 +674,7 @@ async def update_tiffin_status(
         )
 
 @app.delete("/admin/tiffins/{tiffin_id}")
-async def delete_tiffin(tiffin_id: str, auth: dict = Depends(verify_admin)):
+async def delete_tiffin(tiffin_id: str, _: bool = Depends(verify_admin)):
     try:
         if not is_valid_object_id(tiffin_id):
             raise HTTPException(
@@ -808,16 +701,11 @@ async def delete_tiffin(tiffin_id: str, auth: dict = Depends(verify_admin)):
 
 @app.get("/user/tiffins")
 async def get_user_tiffins(
-    auth: dict = Depends(verify_api_key),
-    date: Optional[str] = None,
-    user_id: Optional[str] = None
+    user_id: str = Depends(verify_user),
+    date: Optional[str] = None
 ):
     try:
-        # If admin is making the request, they can specify a user_id
-        # Otherwise, use the authenticated user's ID
-        target_user_id = user_id if (auth["is_admin"] and user_id) else auth["user_id"]
-        
-        query = {"assigned_users": target_user_id}
+        query = {"assigned_users": user_id}
         if date:
             # Validate date format
             try:
@@ -844,7 +732,7 @@ async def get_user_tiffins(
 @app.post("/user/cancel-tiffin")
 async def cancel_tiffin(
     tiffin_id: str,
-    auth: dict = Depends(verify_api_key)
+    user_id: str = Depends(verify_user)
 ):
     try:
         if not is_valid_object_id(tiffin_id):
@@ -860,24 +748,22 @@ async def cancel_tiffin(
                 detail="Tiffin not found"
             )
         
-        user_id = auth["user_id"]
-        
         # Admin can cancel any tiffin
-        if not auth["is_admin"] and user_id not in tiffin["assigned_users"]:
+        if user_id != ADMIN_ID and user_id not in tiffin["assigned_users"]:
             raise HTTPException(
                 status_code=403,
                 detail="Not authorized to cancel this tiffin"
             )
         
         # Only check cancellation time for regular users, not admin
-        if not auth["is_admin"] and not await is_cancellation_allowed(tiffin):
+        if user_id != ADMIN_ID and not await is_cancellation_allowed(tiffin):
             raise HTTPException(
                 status_code=400,
                 detail="Cancellation time has passed"
             )
         
         # For admin, just change status
-        if auth["is_admin"]:
+        if user_id == ADMIN_ID:
             result = db.tiffins.update_one(
                 {"_id": ObjectId(tiffin_id)},
                 {
@@ -905,59 +791,44 @@ async def cancel_tiffin(
                     {"$set": {"status": TiffinStatus.CANCELLED}}
                 )
         
-        if result.modified_count == 0:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to cancel tiffin"
-            )
-        
         return {"status": "success"}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
-                        status_code=500,
+            status_code=500,
             detail=f"Failed to cancel tiffin: {str(e)}"
         )
 
 @app.get("/user/history")
 async def get_user_history(
-    auth: dict = Depends(verify_api_key),
+    user_id: str = Depends(verify_user),
     start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    user_id: Optional[str] = None
+    end_date: Optional[str] = None
 ):
     try:
-        # If admin is making the request, they can specify a user_id
-        # Otherwise, use the authenticated user's ID
-        target_user_id = user_id if (auth["is_admin"] and user_id) else auth["user_id"]
-        
-        query = {"assigned_users": target_user_id}
-        date_query = {}
-        
-        # Validate and add date filters
-        if start_date:
-            try:
-                datetime.strptime(start_date, "%Y-%m-%d")
-                date_query["$gte"] = start_date
-            except ValueError:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid start_date format. Use YYYY-MM-DD"
-                )
+        query = {"assigned_users": user_id}
+        if start_date or end_date:
+            query["date"] = {}
+            if start_date:
+                try:
+                    datetime.strptime(start_date, "%Y-%m-%d")
+                    query["date"]["$gte"] = start_date
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid start_date format. Use YYYY-MM-DD"
+                    )
                 
-        if end_date:
-            try:
-                datetime.strptime(end_date, "%Y-%m-%d")
-                date_query["$lte"] = end_date
-            except ValueError:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid end_date format. Use YYYY-MM-DD"
-                )
-        
-        if date_query:
-            query["date"] = date_query
+            if end_date:
+                try:
+                    datetime.strptime(end_date, "%Y-%m-%d")
+                    query["date"]["$lte"] = end_date
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid end_date format. Use YYYY-MM-DD"
+                    )
         
         history = list(db.tiffins.find(query).sort("date", -1))
         for item in history:
@@ -974,17 +845,17 @@ async def get_user_history(
 @app.post("/user/request-tiffin")
 async def request_special_tiffin(
     request: TiffinRequest,
-    auth: dict = Depends(verify_api_key)
+    user_id: str = Depends(verify_user)
 ):
     try:
         # If admin is making request, use the provided user_id
         # Otherwise, override with authenticated user's ID
-        if not auth["is_admin"]:
-            request.user_id = auth["user_id"]
+        if user_id != ADMIN_ID:
+            request.user_id = user_id
         
         # Validate user exists
-        user = db.users.find_one({"user_id": request.user_id})
-        if not user:
+        target_user = db.users.find_one({"user_id": request.user_id})
+        if not target_user:
             raise HTTPException(
                 status_code=404,
                 detail="User not found"
@@ -1021,7 +892,7 @@ async def request_special_tiffin(
 @app.get("/admin/tiffin-requests")
 async def get_tiffin_requests(
     status: Optional[str] = None,
-    auth: dict = Depends(verify_admin)
+    _: bool = Depends(verify_admin)
 ):
     try:
         query = {}
@@ -1038,54 +909,9 @@ async def get_tiffin_requests(
             detail=f"Failed to fetch tiffin requests: {str(e)}"
         )
 
-@app.put("/admin/tiffin-requests/{request_id}")
-async def update_tiffin_request(
-    request_id: str,
-    status: str,
-    auth: dict = Depends(verify_admin)
-):
-    try:
-        if not is_valid_object_id(request_id):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid request ID format"
-            )
-            
-        allowed_statuses = ["pending", "approved", "rejected", "completed"]
-        if status not in allowed_statuses:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid status. Must be one of: {', '.join(allowed_statuses)}"
-            )
-        
-        result = db.tiffin_requests.update_one(
-            {"_id": ObjectId(request_id)},
-            {
-                "$set": {
-                    "status": status,
-                    "updated_at": datetime.now(IST)
-                }
-            }
-        )
-        
-        if result.matched_count == 0:
-            raise HTTPException(
-                status_code=404,
-                detail="Tiffin request not found"
-            )
-        
-        return {"status": "success"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update tiffin request: {str(e)}"
-        )
-
 # Notice Management Endpoints
 @app.post("/admin/notices")
-async def create_notice(notice: Notice, auth: dict = Depends(verify_admin)):
+async def create_notice(notice: Notice, _: bool = Depends(verify_admin)):
     try:
         notice_dict = notice.dict()
         result = db.notices.insert_one(notice_dict)
@@ -1099,10 +925,10 @@ async def create_notice(notice: Notice, auth: dict = Depends(verify_admin)):
             detail=f"Failed to create notice: {str(e)}"
         )
 
-@app.get("/notices")
-async def get_notices(auth: dict = Depends(verify_api_key)):
+@app.get("/user/notices")
+async def get_user_notices(user_id: str = Depends(verify_user)):
     try:
-        current_time = datetime.now(IST)
+                current_time = datetime.now(IST)
         query = {
             "$or": [
                 {"expires_at": None},
@@ -1119,64 +945,9 @@ async def get_notices(auth: dict = Depends(verify_api_key)):
             status_code=500,
             detail=f"Failed to fetch notices: {str(e)}"
         )
-
-@app.get("/admin/notices")
-async def get_all_notices(auth: dict = Depends(verify_admin)):
-    try:
-        notices = list(db.notices.find().sort("created_at", -1))
-        for notice in notices:
-            notice["_id"] = str(notice["_id"])
-        return notices
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch notices: {str(e)}"
-        )
-
-@app.put("/admin/notices/{notice_id}")
-async def update_notice(
-    notice_id: str,
-    updates: Dict,
-    auth: dict = Depends(verify_admin)
-):
-    try:
-        if not is_valid_object_id(notice_id):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid notice ID format"
-            )
-            
-        allowed_updates = {"title", "content", "priority", "expires_at"}
-        update_data = {k: v for k, v in updates.items() if k in allowed_updates}
-        
-        if not update_data:
-            raise HTTPException(
-                status_code=400,
-                detail="No valid updates provided"
-            )
-        
-        result = db.notices.update_one(
-            {"_id": ObjectId(notice_id)},
-            {"$set": update_data}
-        )
-        
-        if result.matched_count == 0:
-            raise HTTPException(
-                status_code=404,
-                detail="Notice not found"
-            )
-        
-        return {"status": "success"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update notice: {str(e)}"
-        )
            
 @app.delete("/admin/notices/{notice_id}")
-async def delete_notice(notice_id: str, auth: dict = Depends(verify_admin)):
+async def delete_notice(notice_id: str, _: bool = Depends(verify_admin)):
     try:
         if not is_valid_object_id(notice_id):
             raise HTTPException(
@@ -1201,7 +972,7 @@ async def delete_notice(notice_id: str, auth: dict = Depends(verify_admin)):
 
 # Poll Management Endpoints
 @app.post("/admin/polls")
-async def create_poll(poll: Poll, auth: dict = Depends(verify_admin)):
+async def create_poll(poll: Poll, _: bool = Depends(verify_admin)):
     try:
         poll_dict = poll.dict()
         result = db.polls.insert_one(poll_dict)
@@ -1215,8 +986,8 @@ async def create_poll(poll: Poll, auth: dict = Depends(verify_admin)):
             detail=f"Failed to create poll: {str(e)}"
         )
 
-@app.get("/polls")
-async def get_active_polls(auth: dict = Depends(verify_api_key)):
+@app.get("/user/polls")
+async def get_active_polls(user_id: str = Depends(verify_user)):
     try:
         current_time = datetime.now(IST)
         query = {
@@ -1235,24 +1006,11 @@ async def get_active_polls(auth: dict = Depends(verify_api_key)):
             detail=f"Failed to fetch polls: {str(e)}"
         )
 
-@app.get("/admin/polls")
-async def get_all_polls(auth: dict = Depends(verify_admin)):
-    try:
-        polls = list(db.polls.find().sort("start_date", -1))
-        for poll in polls:
-            poll["_id"] = str(poll["_id"])
-        return polls
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch polls: {str(e)}"
-        )
-
-@app.post("/polls/{poll_id}/vote")
+@app.post("/user/vote-poll/{poll_id}")
 async def vote_poll(
     poll_id: str,
     option_index: int,
-    auth: dict = Depends(verify_api_key)
+    user_id: str = Depends(verify_user)
 ):
     try:
         if not is_valid_object_id(poll_id):
@@ -1261,8 +1019,6 @@ async def vote_poll(
                 detail="Invalid poll ID format"
             )
             
-        user_id = auth["user_id"]
-        
         # Check if poll exists and is active
         poll = db.polls.find_one({
             "_id": ObjectId(poll_id),
@@ -1277,17 +1033,18 @@ async def vote_poll(
                 detail="Poll not found or inactive"
             )
         
-        # Check if user already voted
-        existing_vote = db.poll_votes.find_one({
-            "poll_id": ObjectId(poll_id),
-            "user_id": user_id
-        })
-        
-        if existing_vote:
-            raise HTTPException(
-                status_code=400,
-                detail="Already voted in this poll"
-            )
+        # Check if user already voted (skip for admin)
+        if user_id != ADMIN_ID:
+            existing_vote = db.poll_votes.find_one({
+                "poll_id": ObjectId(poll_id),
+                "user_id": user_id
+            })
+            
+            if existing_vote:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Already voted in this poll"
+                )
         
         # Validate option index
         if option_index < 0 or option_index >= len(poll["options"]):
@@ -1296,19 +1053,20 @@ async def vote_poll(
                 detail=f"Invalid option index. Must be between 0 and {len(poll['options']) - 1}"
             )
         
-        # Record vote
-        db.poll_votes.insert_one({
-            "poll_id": ObjectId(poll_id),
-            "user_id": user_id,
-            "option_index": option_index,
-            "voted_at": datetime.now(IST)
-        })
-        
-        # Update poll results
-        db.polls.update_one(
-            {"_id": ObjectId(poll_id)},
-            {"$inc": {f"options.{option_index}.votes": 1}}
-        )
+        # Record vote (skip for admin to avoid skewing results)
+        if user_id != ADMIN_ID:
+            db.poll_votes.insert_one({
+                "poll_id": ObjectId(poll_id),
+                "user_id": user_id,
+                "option_index": option_index,
+                "voted_at": datetime.now(IST)
+            })
+            
+            # Update poll results
+            db.polls.update_one(
+                {"_id": ObjectId(poll_id)},
+                {"$inc": {f"options.{option_index}.votes": 1}}
+            )
         
         return {"status": "success"}
     except HTTPException:
@@ -1319,82 +1077,12 @@ async def vote_poll(
             detail=f"Failed to record vote: {str(e)}"
         )
 
-@app.put("/admin/polls/{poll_id}")
-async def update_poll(
-    poll_id: str,
-    updates: Dict,
-    auth: dict = Depends(verify_admin)
-):
-    try:
-        if not is_valid_object_id(poll_id):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid poll ID format"
-            )
-            
-        allowed_updates = {"question", "options", "start_date", "end_date", "active"}
-        update_data = {k: v for k, v in updates.items() if k in allowed_updates}
-        
-        if not update_data:
-            raise HTTPException(
-                status_code=400,
-                detail="No valid updates provided"
-            )
-        
-        result = db.polls.update_one(
-            {"_id": ObjectId(poll_id)},
-            {"$set": update_data}
-        )
-        
-        if result.matched_count == 0:
-            raise HTTPException(
-                status_code=404,
-                detail="Poll not found"
-            )
-        
-        return {"status": "success"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update poll: {str(e)}"
-        )
-
-@app.delete("/admin/polls/{poll_id}")
-async def delete_poll(poll_id: str, auth: dict = Depends(verify_admin)):
-    try:
-        if not is_valid_object_id(poll_id):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid poll ID format"
-            )
-            
-        result = db.polls.delete_one({"_id": ObjectId(poll_id)})
-        if result.deleted_count == 0:
-            raise HTTPException(
-                status_code=404,
-                detail="Poll not found"
-            )
-        
-        # Clean up related votes
-        db.poll_votes.delete_many({"poll_id": ObjectId(poll_id)})
-        
-        return {"status": "success"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to delete poll: {str(e)}"
-        )
-
 # Invoice Management Endpoints
 @app.post("/admin/generate-invoices")
 async def generate_invoices(
     start_date: str,
     end_date: str,
-    auth: dict = Depends(verify_admin)
+    _: bool = Depends(verify_admin)
 ):
     try:
         # Validate date formats
@@ -1432,8 +1120,7 @@ async def generate_invoices(
         
         return {
             "status": "success",
-            "generated_invoices": len(generated_invoices),
-            "invoice_ids": generated_invoices
+            "generated_invoices": len(generated_invoices)
         }
     except HTTPException:
         raise
@@ -1443,102 +1130,28 @@ async def generate_invoices(
             detail=f"Failed to generate invoices: {str(e)}"
         )
 
-@app.get("/invoices")
-async def get_invoices(auth: dict = Depends(verify_api_key), user_id: Optional[str] = None):
+@app.get("/user/invoices")
+async def get_user_invoices(user_id: str = Depends(verify_user)):
     try:
-        # Admin can get any user's invoices, regular users can only get their own
-        if user_id and not auth["is_admin"]:
-            raise HTTPException(
-                status_code=403,
-                detail="Not authorized to access other users' invoices"
-            )
-        
-        # Determine which user's invoices to fetch
-        target_user_id = user_id if (auth["is_admin"] and user_id) else auth["user_id"]
-        
-        # Get all invoices for the user
-        invoices = list(db.invoices.find({"user_id": target_user_id}).sort("generated_at", -1))
-        for invoice in invoices:
-            invoice["_id"] = str(invoice["_id"])
-        
-        return invoices
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch invoices: {str(e)}"
-        )
-
-@app.get("/admin/invoices")
-async def get_all_invoices(
-    paid: Optional[bool] = None,
-    auth: dict = Depends(verify_admin)
-):
-    try:
-        query = {}
-        if paid is not None:
-            query["paid"] = paid
-        
-        invoices = list(db.invoices.find(query).sort("generated_at", -1))
-        for invoice in invoices:
-            invoice["_id"] = str(invoice["_id"])
-        
-        return invoices
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch invoices: {str(e)}"
-        )
-
-@app.get("/invoices/{invoice_id}")
-async def get_invoice_details(invoice_id: str, auth: dict = Depends(verify_api_key)):
-    try:
-        if not is_valid_object_id(invoice_id):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid invoice ID format"
-            )
+        # Admin can see all invoices
+        if user_id == ADMIN_ID:
+            invoices = list(db.invoices.find().sort("generated_at", -1))
+        else:
+            invoices = list(db.invoices.find({"user_id": user_id}).sort("generated_at", -1))
             
-        invoice = db.invoices.find_one({"_id": ObjectId(invoice_id)})
-        if not invoice:
-            raise HTTPException(
-                status_code=404,
-                detail="Invoice not found"
-            )
-        
-        # Check authorization: admin can see any invoice, users can only see their own
-        if not auth["is_admin"] and invoice["user_id"] != auth["user_id"]:
-            raise HTTPException(
-                status_code=403,
-                detail="Not authorized to access this invoice"
-            )
-        
-        # Convert ObjectId to string
-        invoice["_id"] = str(invoice["_id"])
-        
-        # Get tiffin details
-        tiffin_ids = [ObjectId(t_id) for t_id in invoice["tiffins"]]
-        tiffins = list(db.tiffins.find({"_id": {"$in": tiffin_ids}}))
-        for tiffin in tiffins:
-            tiffin["_id"] = str(tiffin["_id"])
-        
-        # Add tiffin details to response
-        invoice["tiffin_details"] = tiffins
-        
-        return invoice
-    except HTTPException:
-        raise
+        for invoice in invoices:
+            invoice["_id"] = str(invoice["_id"])
+        return invoices
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch invoice details: {str(e)}"
+            detail=f"Failed to fetch invoices: {str(e)}"
         )
 
 @app.put("/admin/invoices/{invoice_id}/mark-paid")
 async def mark_invoice_paid(
     invoice_id: str,
-    auth: dict = Depends(verify_admin)
+    _: bool = Depends(verify_admin)
 ):
     try:
         if not is_valid_object_id(invoice_id):
@@ -1567,37 +1180,11 @@ async def mark_invoice_paid(
             detail=f"Failed to update invoice: {str(e)}"
         )
 
-@app.delete("/admin/invoices/{invoice_id}")
-async def delete_invoice(invoice_id: str, auth: dict = Depends(verify_admin)):
-    try:
-        if not is_valid_object_id(invoice_id):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid invoice ID format"
-            )
-            
-        result = db.invoices.delete_one({"_id": ObjectId(invoice_id)})
-        if result.deleted_count == 0:
-            raise HTTPException(
-                status_code=404,
-                detail="Invoice not found"
-            )
-        
-        return {"status": "success"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to delete invoice: {str(e)}"
-        )
-
 # Dashboard Statistics
 @app.get("/admin/dashboard")
-async def get_dashboard_stats(auth: dict = Depends(verify_admin)):
+async def get_dashboard_stats(_: bool = Depends(verify_admin)):
     try:
         today = datetime.now(IST).strftime("%Y-%m-%d")
-        current_month = datetime.now(IST).strftime("%Y-%m")
         
         stats = {
             "total_users": db.users.count_documents({"active": True}),
@@ -1609,13 +1196,7 @@ async def get_dashboard_stats(auth: dict = Depends(verify_admin)):
                 "date": today,
                 "status": TiffinStatus.DELIVERED
             }),
-            "monthly_revenue": await calculate_monthly_revenue(),
-            "pending_requests": db.tiffin_requests.count_documents({"status": "pending"}),
-            "active_polls": db.polls.count_documents({
-                "active": True,
-                "end_date": {"$gt": datetime.now(IST)}
-            }),
-            "unpaid_invoices": db.invoices.count_documents({"paid": False})
+            "monthly_revenue": await calculate_monthly_revenue()
         }
         return stats
     except Exception as e:
@@ -1638,9 +1219,9 @@ async def calculate_monthly_revenue():
     except Exception:
         return 0
 
-# User Statistics Endpoints
+# Additional Utility Endpoints
 @app.get("/admin/user/{user_id}/stats")
-async def get_user_stats(user_id: str, auth: dict = Depends(verify_admin)):
+async def get_user_stats(user_id: str, _: bool = Depends(verify_admin)):
     try:
         user = db.users.find_one({"user_id": user_id})
         if not user:
@@ -1648,8 +1229,6 @@ async def get_user_stats(user_id: str, auth: dict = Depends(verify_admin)):
                 status_code=404,
                 detail="User not found"
             )
-        
-        current_month = datetime.now(IST).strftime("%Y-%m")
         
         tiffins = list(db.tiffins.find({"assigned_users": user_id}))
         
@@ -1660,75 +1239,18 @@ async def get_user_stats(user_id: str, auth: dict = Depends(verify_admin)):
             "active_since": user["created_at"],
             "last_login": user.get("last_login"),
             "current_month_tiffins": sum(1 for t in tiffins if 
-                t["date"].startswith(current_month) and t["status"] != TiffinStatus.CANCELLED
-            ),
-            "current_month_spent": sum(t["price"] for t in tiffins if 
-                t["date"].startswith(current_month) and t["status"] != TiffinStatus.CANCELLED
-            ),
-            "unpaid_invoices": db.invoices.count_documents({
-                "user_id": user_id,
-                "paid": False
-            })
-        }
-        return stats
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch user stats: {str(e)}"
-        )
-
-@app.get("/user/stats")
-async def get_my_stats(auth: dict = Depends(verify_api_key)):
-    try:
-        user_id = auth["user_id"]
-        
-        # If admin is checking stats, return a placeholder
-        if auth["is_admin"]:
-            return {
-                "message": "Admin user does not have personal tiffin stats"
-            }
-        
-        user = db.users.find_one({"user_id": user_id})
-        if not user:
-            raise HTTPException(
-                status_code=404,
-                detail="User not found"
+                t["date"][:7] == datetime.now(IST).strftime("%Y-%m")
             )
-        
-        current_month = datetime.now(IST).strftime("%Y-%m")
-        
-        tiffins = list(db.tiffins.find({"assigned_users": user_id}))
-        
-        stats = {
-            "total_tiffins": len(tiffins),
-            "cancelled_tiffins": sum(1 for t in tiffins if t["status"] == TiffinStatus.CANCELLED),
-            "total_spent": sum(t["price"] for t in tiffins if t["status"] != TiffinStatus.CANCELLED),
-            "active_since": user["created_at"],
-            "current_month_tiffins": sum(1 for t in tiffins if 
-                t["date"].startswith(current_month) and t["status"] != TiffinStatus.CANCELLED
-            ),
-            "current_month_spent": sum(t["price"] for t in tiffins if 
-                t["date"].startswith(current_month) and t["status"] != TiffinStatus.CANCELLED
-            ),
-            "unpaid_invoices": db.invoices.count_documents({
-                "user_id": user_id,
-                "paid": False
-            })
         }
         return stats
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch user stats: {str(e)}"
         )
 
-# Additional Utility Endpoints
 @app.get("/admin/export-data")
-async def export_data(auth: dict = Depends(verify_admin)):
+async def export_data(_: bool = Depends(verify_admin)):
     """Export all relevant data for backup"""
     try:
         export_data = {
@@ -1736,8 +1258,7 @@ async def export_data(auth: dict = Depends(verify_admin)):
             "tiffins": list(db.tiffins.find()),
             "notices": list(db.notices.find()),
             "polls": list(db.polls.find()),
-            "invoices": list(db.invoices.find()),
-            "tiffin_requests": list(db.tiffin_requests.find())
+            "invoices": list(db.invoices.find())
         }
         
         # Convert ObjectIds to strings
@@ -1757,7 +1278,7 @@ async def export_data(auth: dict = Depends(verify_admin)):
         )
 
 @app.get("/admin/system-health")
-async def check_system_health(auth: dict = Depends(verify_admin)):
+async def check_system_health(_: bool = Depends(verify_admin)):
     """Check system health and database status"""
     try:
         db_status = client.admin.command('ping')
@@ -1769,18 +1290,7 @@ async def check_system_health(auth: dict = Depends(verify_admin)):
             "total_tiffins": db.tiffins.count_documents({}),
             "active_polls": db.polls.count_documents({"active": True}),
             "server_time": current_time,
-            "timezone": str(IST),
-            "memory_usage": {
-                "collection_counts": {
-                    "users": db.users.count_documents({}),
-                    "tiffins": db.tiffins.count_documents({}),
-                    "notices": db.notices.count_documents({}),
-                    "polls": db.polls.count_documents({}),
-                    "poll_votes": db.poll_votes.count_documents({}),
-                    "invoices": db.invoices.count_documents({}),
-                    "tiffin_requests": db.tiffin_requests.count_documents({})
-                }
-            }
+            "timezone": str(IST)
         }
         return stats
     except Exception as e:
@@ -1809,7 +1319,7 @@ async def cleanup_old_data():
             {"$set": {"active": False}}
         )
         
-                # Archive old tiffin requests
+        # Archive old tiffin requests
         db.tiffin_requests.update_many(
             {
                 "created_at": {"$lt": thirty_days_ago},
@@ -1818,18 +1328,7 @@ async def cleanup_old_data():
             {"$set": {"status": "archived"}}
         )
         
-        # Remove old poll votes for inactive polls
-        old_poll_ids = [p["_id"] for p in db.polls.find({
-            "active": False,
-            "end_date": {"$lt": thirty_days_ago}
-        })]
-        
-        if old_poll_ids:
-            db.poll_votes.delete_many({
-                "poll_id": {"$in": old_poll_ids}
-            })
-        
-        print(f"Cleanup completed successfully at {datetime.now(IST)}")
+        print("Cleanup completed successfully")
     except Exception as e:
         print(f"Cleanup error: {str(e)}")
 
@@ -1855,15 +1354,9 @@ def setup_indexes():
         
         # Notice index
         db.notices.create_index([("expires_at", ASCENDING)])
-        db.notices.create_index([("priority", ASCENDING)])
         
         # Invoice index
         db.invoices.create_index([("user_id", ASCENDING)])
-        db.invoices.create_index([("paid", ASCENDING)])
-        
-        # Tiffin requests index
-        db.tiffin_requests.create_index([("user_id", ASCENDING)])
-        db.tiffin_requests.create_index([("status", ASCENDING)])
         
         print("Database indexes setup completed")
     except Exception as e:
@@ -1874,16 +1367,17 @@ def setup_indexes():
 async def startup_event():
     """Initialize application on startup"""
     try:
-        # Setup database indexes
+                # Setup database indexes
         setup_indexes()
         
-        # Schedule periodic cleanup
-        asyncio.create_task(cleanup_old_data())
+        # Start background tasks
+        background_tasks = BackgroundTasks()
+        background_tasks.add_task(cleanup_old_data)
         
         # Start keep-alive task
         asyncio.create_task(keep_alive())
         
-        print(f"Application startup completed successfully at {datetime.now(IST)}")
+        print("Application startup completed successfully")
     except Exception as e:
         print(f"Startup error: {str(e)}")
 
@@ -1894,7 +1388,7 @@ async def shutdown_event():
     try:
         # Close MongoDB connection
         client.close()
-        print(f"Application shutdown completed successfully at {datetime.now(IST)}")
+        print("Application shutdown completed successfully")
     except Exception as e:
         print(f"Shutdown error: {str(e)}")
 
