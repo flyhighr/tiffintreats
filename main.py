@@ -23,12 +23,12 @@ app = FastAPI(title="TiffinTreats API")
 
 # CORS Configuration
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+       CORSMiddleware,
+       allow_origins=["*"],
+       allow_credentials=True,
+       allow_methods=["*"],
+       allow_headers=["*", "X-API-Key"],
+   )
 
 # MongoDB Connection
 MONGODB_URL = os.getenv("MONGODB_URL")
