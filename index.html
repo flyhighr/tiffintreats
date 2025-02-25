@@ -3,1164 +3,1245 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TiffinTreats - Home Food Delivery</title>
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <style>
-        :root {
-            --primary-color: #ff6b6b;
-            --primary-dark: #ff4757;
-            --secondary-color: #4ecdc4;
-            --accent-color: #ffd93d;
-            --background-color: #f7f7f7;
-            --text-color: #2d3436;
-            --border-color: #dfe6e9;
-            --success-color: #00b894;
-            --error-color: #d63031;
-            --gray-light: #f1f2f6;
-            --gray-medium: #b2bec3;
-            --shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-            --transition: all 0.3s ease;
-        }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: 'Poppins', sans-serif;
-        }
-
-        body {
-            background-color: var(--background-color);
-            color: var(--text-color);
-            line-height: 1.6;
-        }
-
-        /* Loading Spinner */
-        .spinner-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(255, 255, 255, 0.9);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-        }
-
-        .spinner {
-            width: 50px;
-            height: 50px;
-            border: 3px solid var(--gray-light);
-            border-radius: 50%;
-            border-top-color: var(--primary-color);
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        /* Toast Notifications */
-        .toast-container {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            z-index: 1000;
-        }
-
-        .toast {
-            padding: 1rem;
-            margin-bottom: 0.5rem;
-            border-radius: 5px;
-            color: white;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            min-width: 300px;
-            animation: slideIn 0.3s ease;
-        }
-
-        .toast.success {
-            background-color: var(--success-color);
-        }
-
-        .toast.error {
-            background-color: var(--error-color);
-        }
-
-        @keyframes slideIn {
-            from { transform: translateX(100%); }
-            to { transform: translateX(0); }
-        }
-
-        /* Authentication */
-        .auth-container {
-            height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
-            padding: 1rem;
-        }
-
-        .auth-box {
-            background: white;
-            padding: 2rem;
-            border-radius: 10px;
-            box-shadow: var(--shadow);
-            width: 100%;
-            max-width: 400px;
-        }
-
-        .auth-box h2 {
-            text-align: center;
-            color: var(--primary-color);
-            margin-bottom: 1.5rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-        }
-
-        .form-group {
-            position: relative;
-            margin-bottom: 1.5rem;
-        }
-
-        .form-group i {
-            position: absolute;
-            left: 1rem;
-            top: 50%;
-            transform: translateY(-50%);
-            color: var(--gray-medium);
-        }
-
-        .form-control {
-            width: 100%;
-            padding: 0.8rem 1rem 0.8rem 2.5rem;
-            border: 1px solid var(--border-color);
-            border-radius: 5px;
-            font-size: 1rem;
-            transition: var(--transition);
-        }
-
-        .form-control:focus {
-            outline: none;
-            border-color: var(--primary-color);
-            box-shadow: 0 0 0 2px rgba(255, 107, 107, 0.1);
-        }
-
-        .btn {
-            width: 100%;
-            padding: 0.8rem;
-            border: none;
-            border-radius: 5px;
-            font-size: 1rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: var(--transition);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-        }
-
-        .btn-primary {
-            background-color: var(--primary-color);
-            color: white;
-        }
-
-        .btn-primary:hover {
-            background-color: var(--primary-dark);
-        }
-
-        /* Navigation */
-        .navbar {
-            background-color: white;
-            padding: 1rem 2rem;
-            box-shadow: var(--shadow);
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
-
-        .nav-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .nav-brand {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: var(--primary-color);
-            text-decoration: none;
-        }
-
-        .nav-links {
-            display: flex;
-            gap: 1.5rem;
-            align-items: center;
-        }
-
-        .nav-link {
-            text-decoration: none;
-            color: var(--text-color);
-            padding: 0.5rem;
-            border-radius: 5px;
-            transition: var(--transition);
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }
-
-        .nav-link:hover,
-        .nav-link.active {
-            color: var(--primary-color);
-            background-color: var(--gray-light);
-        }
-
-        .mobile-menu-btn {
-            display: none;
-            background: none;
-            border: none;
-            font-size: 1.5rem;
-            color: var(--text-color);
-            cursor: pointer;
-        }
-
-        /* Content Area */
-        .content-area {
-            max-width: 1200px;
-            margin: 2rem auto;
-            padding: 0 1rem;
-        }
-
-        .page {
-            background: white;
-            padding: 2rem;
-            border-radius: 10px;
-            box-shadow: var(--shadow);
-        }
-
-        /* Cards */
-        .card {
-            background: white;
-            padding: 1.5rem;
-            border-radius: 8px;
-            box-shadow: var(--shadow);
-            margin-bottom: 1rem;
-            transition: var(--transition);
-        }
-
-        .card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-        }
-
-        /* Grid Layout */
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 1.5rem;
-        }
-
-        /* Responsive Design */
-        @media (max-width: 768px) {
-            .mobile-menu-btn {
-                display: block;
-            }
-
-            .nav-links {
-                display: none;
-                position: absolute;
-                top: 100%;
-                left: 0;
-                right: 0;
-                background: white;
-                flex-direction: column;
-                padding: 1rem;
-                box-shadow: var(--shadow);
-            }
-
-            .nav-links.active {
-                display: flex;
-            }
-
-            .content-area {
-                margin: 1rem auto;
-            }
-
-            .page {
-                padding: 1rem;
-            }
-
-            .grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        /* Status Indicators */
-        .status {
-            display: inline-block;
-            padding: 0.25rem 0.5rem;
-            border-radius: 3px;
-            font-size: 0.875rem;
-            font-weight: 500;
-        }
-
-        .status-preparing { background-color: var(--accent-color); }
-        .status-ready { background-color: var(--success-color); color: white; }
-        .status-cancelled { background-color: var(--error-color); color: white; }
-
-        /* Forms */
-        .form-section {
-            margin-bottom: 2rem;
-        }
-
-        .form-section h3 {
-            margin-bottom: 1rem;
-            color: var(--primary-color);
-        }
-
-        .form-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 1rem;
-        }
-
-        /* Utilities */
-        .hidden {
-            display: none !important;
-        }
-
-        .text-center { text-align: center; }
-        .mt-1 { margin-top: 1rem; }
-        .mb-1 { margin-bottom: 1rem; }
-    </style>
+    <title>TiffinTreats</title>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="istyle.css">
+    <link rel="icon" type="image/png" href="favicon.png">
 </head>
-<body>
-    <!-- App Container -->
-    <div id="app">
-        <!-- Loading Spinner -->
-        <div id="spinner" class="spinner-overlay hidden">
-            <div class="spinner"></div>
-        </div>
-
-        <!-- Toast Container -->
-        <div id="toast-container" class="toast-container"></div>
-
-        <!-- Authentication Section -->
-        <div id="auth-section" class="auth-container">
-            <div class="auth-box">
-                <h2>
-                    <i class="fas fa-utensils"></i>
-                    TiffinTreats
-                </h2>
-                </form>
-                <form id="login-form">
-                    <div class="form-group">
-                        <i class="fas fa-phone"></i>
-                        <input type="tel" id="phone" class="form-control" 
-                               placeholder="Phone Number" required>
-                    </div>
-                    <div class="form-group">
-                        <i class="fas fa-lock"></i>
-                        <input type="password" id="password" class="form-control" 
-                               placeholder="Password" required>
-                    </div>
-                    <button type="submit" class="btn btn-primary">
-                        <i class="fas fa-sign-in-alt"></i> Login
-                    </button>
-                </form>
+<body class="dark-theme">
+    <!-- Login/Registration Screen -->
+    <div id="auth-container" class="auth-container">
+        <div class="auth-card">
+            <div class="auth-header">
+                <img src="logo.png" alt="TiffinTreats Logo" class="auth-logo">
+                <h1>TiffinTreats</h1>
+                <p>Fresh homemade meals delivered to your doorstep</p>
+            </div>
+            <div class="auth-tabs">
+                <button id="login-tab" class="auth-tab active">Login</button>
+                <button id="register-tab" class="auth-tab">Register</button>
+            </div>
+            <div id="login-form" class="auth-form">
+                <div class="form-group">
+                    <label for="login-userid">User ID</label>
+                    <input type="text" id="login-userid" placeholder="Enter your user ID">
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Password</label>
+                    <input type="password" id="login-password" placeholder="Enter your password">
+                </div>
+                <button id="login-btn" class="auth-button">Login</button>
+                <p class="auth-message" id="login-message"></p>
+            </div>
+            <div id="register-form" class="auth-form hidden">
+                <div class="form-group">
+                    <label for="reg-userid">User ID</label>
+                    <input type="text" id="reg-userid" placeholder="Choose a user ID">
+                </div>
+                <div class="form-group">
+                    <label for="reg-name">Full Name</label>
+                    <input type="text" id="reg-name" placeholder="Enter your full name">
+                </div>
+                <div class="form-group">
+                    <label for="reg-email">Email</label>
+                    <input type="email" id="reg-email" placeholder="Enter your email">
+                </div>
+                <div class="form-group">
+                    <label for="reg-address">Address</label>
+                    <textarea id="reg-address" placeholder="Enter your delivery address"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="reg-password">Password</label>
+                    <input type="password" id="reg-password" placeholder="Choose a password">
+                </div>
+                <button id="register-btn" class="auth-button">Register</button>
+                <p class="auth-message" id="register-message"></p>
             </div>
         </div>
+    </div>
 
-        <!-- Main Application Section -->
-        <div id="main-section" class="hidden">
-            <!-- Navigation -->
-            <nav class="navbar">
-                <div class="nav-container">
-                    <a href="#" class="nav-brand">
-                        <i class="fas fa-utensils"></i>
-                        TiffinTreats
-                    </a>
-                    <button class="mobile-menu-btn">
-                        <i class="fas fa-bars"></i>
-                    </button>
-                    <div class="nav-links">
-                        <a href="#" class="nav-link active" data-page="home">
-                            <i class="fas fa-home"></i> Home
-                        </a>
-                        <a href="#" class="nav-link" data-page="history">
-                            <i class="fas fa-history"></i> History
-                        </a>
-                        <a href="#" class="nav-link" data-page="invoices">
-                            <i class="fas fa-file-invoice"></i> Invoices
-                        </a>
-                        <a href="#" class="nav-link" data-page="notices">
-                            <i class="fas fa-bell"></i> Notices
-                        </a>
-                        <a href="#" class="nav-link admin-only hidden" data-page="admin">
-                            <i class="fas fa-user-shield"></i> Admin
-                        </a>
-                        <a href="#" class="nav-link" id="logout-btn">
-                            <i class="fas fa-sign-out-alt"></i> Logout
-                        </a>
-                    </div>
+    <!-- Main App Container -->
+    <div id="app-container" class="app-container hidden">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <img src="logo.png" alt="TiffinTreats Logo" class="sidebar-logo">
+                <h2>TiffinTreats</h2>
+            </div>
+            <div class="sidebar-user">
+                <div class="user-avatar">
+                    <span id="user-initial"></span>
+                </div>
+                <div class="user-info">
+                    <h3 id="user-name">User Name</h3>
+                    <p id="user-role">User</p>
+                </div>
+            </div>
+            <nav class="sidebar-nav">
+                <div class="nav-section">
+                    <h4>General</h4>
+                    <ul>
+                        <li><a href="#dashboard" class="nav-link active" data-page="dashboard">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                <path fill="none" d="M0 0h24v24H0z"/>
+                                <path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/>
+                            </svg>
+                            Dashboard
+                        </a></li>
+                        <li><a href="#tiffins" class="nav-link" data-page="tiffins">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                <path fill="none" d="M0 0h24v24H0z"/>
+                                <path d="M8.5 2h7a1 1 0 0 1 1 1v1.5c0 .276-.22.5-.5.5h-8a.5.5 0 0 1-.5-.5V3a1 1 0 0 1 1-1zm10 8.5V4a1 1 0 0 0-1-1h-1.5v.5a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 5 3.5V3H3.5a1 1 0 0 0-1 1v17a1 1 0 0 0 1 1h17a1 1 0 0 0 1-1v-9.5zm-2-1a1.5 1.5 0 0 1 1.5 1.5v5a1.5 1.5 0 0 1-1.5 1.5h-5a1.5 1.5 0 0 1-1.5-1.5v-5a1.5 1.5 0 0 1 1.5-1.5h5z"/>
+                            </svg>
+                            My Tiffins
+                        </a></li>
+                        <li><a href="#history" class="nav-link" data-page="history">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                <path fill="none" d="M0 0h24v24H0z"/>
+                                <path d="M12 2c5.523 0 10 4.477 10 10s-4.477 10-10 10S2 17.523 2 12h2a8 8 0 1 1 16 0h2c0-5.523-4.477-10-10-10zm0 5a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm-1 1h2v4h3v2h-5V8z"/>
+                            </svg>
+                            History
+                        </a></li>
+                        <li><a href="#invoices" class="nav-link" data-page="invoices">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                <path fill="none" d="M0 0h24v24H0z"/>
+                                <path d="M20 22H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1zm-1-2V4H5v16h14zM8 9h8v2H8V9zm0 4h8v2H8v-2z"/>
+                            </svg>
+                            Invoices
+                        </a></li>
+                    </ul>
+                </div>
+                
+                <!-- Admin Section (visible only to admins) -->
+                <div class="nav-section admin-section hidden">
+                    <h4>Administration</h4>
+                    <ul>
+                        <li><a href="#admin-dashboard" class="nav-link" data-page="admin-dashboard">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                <path fill="none" d="M0 0h24v24H0z"/>
+                                <path d="M12 1l9.5 5.5v11L12 23l-9.5-5.5v-11L12 1zm0 2.311L4.5 7.653v8.694l7.5 4.342 7.5-4.342V7.653L12 3.311zM12 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-2a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/>
+                            </svg>
+                            Admin Panel
+                        </a></li>
+                        <li><a href="#manage-users" class="nav-link" data-page="manage-users">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                <path fill="none" d="M0 0h24v24H0z"/>
+                                <path d="M2 22a8 8 0 1 1 16 0H2zm8-9c-3.315 0-6-2.685-6-6s2.685-6 6-6 6 2.685 6 6-2.685 6-6 6zm10 4h4v2h-4v-2zm-3-5h7v2h-7v-2zm2-5h5v2h-5V7z"/>
+                            </svg>
+                            Manage Users
+                        </a></li>
+                        <li><a href="#manage-tiffins" class="nav-link" data-page="manage-tiffins">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                <path fill="none" d="M0 0h24v24H0z"/>
+                                <path d="M19 22H5a3 3 0 0 1-3-3V3a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v12h4v4a3 3 0 0 1-3 3zm-1-5v2a1 1 0 0 0 2 0v-2h-2zm-2 3V4H4v15a1 1 0 0 0 1 1h11zM6 7h8v2H6V7zm0 4h8v2H6v-2zm0 4h5v2H6v-2z"/>
+                            </svg>
+                            Manage Tiffins
+                        </a></li>
+                        <li><a href="#notices-polls" class="nav-link" data-page="notices-polls">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                <path fill="none" d="M0 0h24v24H0z"/>
+                                <path d="M20 17h2v2H2v-2h2v-7a8 8 0 1 1 16 0v7zm-2 0v-7a6 6 0 1 0-12 0v7h12zm-9 4h6v2H9v-2z"/>
+                            </svg>
+                            Notices & Polls
+                        </a></li>
+                        <li><a href="#generate-invoices" class="nav-link" data-page="generate-invoices">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                <path fill="none" d="M0 0h24v24H0z"/>
+                                <path d="M17 14h5v6H2v-6h5v2h10v-2zM3 3h18v10h-5v2H8v-2H3V3zm2 2v6h16V5H5z"/>
+                            </svg>
+                            Generate Invoices
+                        </a></li>
+                    </ul>
+                </div>
+                
+                <div class="nav-section">
+                    <h4>Account</h4>
+                    <ul>
+                        <li><a href="#profile" class="nav-link" data-page="profile">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                <path fill="none" d="M0 0h24v24H0z"/>
+                                <path d="M20 22h-2v-2a3 3 0 0 0-3-3H9a3 3 0 0 0-3 3v2H4v-2a5 5 0 0 1 5-5h6a5 5 0 0 1 5 5v2zm-8-9a6 6 0 1 1 0-12 6 6 0 0 1 0 12zm0-2a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/>
+                            </svg>
+                            My Profile
+                        </a></li>
+                        <li><a href="#" id="logout-btn" class="nav-link">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                <path fill="none" d="M0 0h24v24H0z"/>
+                                <path d="M5 22a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H5zm10-6l5-4-5-4v3H9v2h6v3z"/>
+                            </svg>
+                            Logout
+                        </a></li>
+                    </ul>
                 </div>
             </nav>
+        </div>
 
-            <!-- Content Pages -->
-            <div class="content-area">
-                <!-- Home Page -->
-                <div id="home-page" class="page">
-                    <div class="grid">
-                        <!-- Today's Tiffins -->
-                        <section class="card">
-                            <h3><i class="fas fa-utensils"></i> Today's Tiffins</h3>
-                            <div id="tiffin-container"></div>
-                        </section>
-
-                        <!-- Active Polls -->
-                        <section class="card">
-                            <h3><i class="fas fa-poll"></i> Active Polls</h3>
-                            <div id="polls-container"></div>
-                        </section>
-
-                        <!-- Latest Notices -->
-                        <section class="card">
-                            <h3><i class="fas fa-bell"></i> Latest Notices</h3>
-                            <div id="notices-container"></div>
-                        </section>
-
-                        <!-- Special Request -->
-                        <section class="card">
-                            <h3><i class="fas fa-comment-alt"></i> Special Request</h3>
-                            <form id="special-request-form">
-                                <div class="form-group">
-                                    <textarea class="form-control" name="description" 
-                                              placeholder="Describe your request" required></textarea>
-                                </div>
-                                <div class="form-group">
-                                    <input type="date" class="form-control" name="date" required>
-                                </div>
-                                <button type="submit" class="btn btn-primary">
-                                    <i class="fas fa-paper-plane"></i> Submit Request
-                                </button>
-                            </form>
-                        </section>
+        <!-- Main Content -->
+        <div class="main-content">
+            <div class="top-bar">
+                <button id="toggle-sidebar" class="toggle-sidebar">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                        <path fill="none" d="M0 0h24v24H0z"/>
+                        <path d="M3 4h18v2H3V4zm0 7h18v2H3v-2zm0 7h18v2H3v-2z"/>
+                    </svg>
+                </button>
+                <div class="search-bar">
+                    <input type="text" placeholder="Search...">
+                    <button>
+                                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                            <path fill="none" d="M0 0h24v24H0z"/>
+                            <path d="M18.031 16.617l4.283 4.282-1.415 1.415-4.282-4.283A8.96 8.96 0 0 1 11 20c-4.968 0-9-4.032-9-9s4.032-9 9-9 9 4.032 9 9a8.96 8.96 0 0 1-1.969 5.617zm-2.006-.742A6.977 6.977 0 0 0 18 11c0-3.868-3.133-7-7-7-3.868 0-7 3.132-7 7 0 3.867 3.132 7 7 7a6.977 6.977 0 0 0 4.875-1.975l.15-.15z"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="notifications">
+                    <button id="notifications-btn">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                            <path fill="none" d="M0 0h24v24H0z"/>
+                            <path d="M20 17h2v2H2v-2h2v-7a8 8 0 1 1 16 0v7zm-2 0v-7a6 6 0 1 0-12 0v7h12zm-9 4h6v2H9v-2z"/>
+                        </svg>
+                        <span class="notification-badge" id="notification-count">0</span>
+                    </button>
+                    <div class="notification-dropdown" id="notification-dropdown">
+                        <div class="notification-header">
+                            <h3>Notifications</h3>
+                            <button id="mark-all-read">Mark all as read</button>
+                        </div>
+                        <div class="notification-list" id="notification-list">
+                            <!-- Notifications will be added here dynamically -->
+                        </div>
                     </div>
                 </div>
-
-<script>
-// Configuration
-const config = {
-    API_URL: 'https://tiffintreats-20mb.onrender.com',
-    TOKEN_KEY: 'tiffin_treats_token',
-    REFRESH_INTERVAL: 300000 // 5 minutes
-};
-
-// Utility Class
-class Utils {
-    static showSpinner() {
-        document.getElementById('spinner').classList.remove('hidden');
-    }
-
-    static hideSpinner() {
-        document.getElementById('spinner').classList.add('hidden');
-    }
-
-    static showToast(message, type = 'success') {
-        const toast = document.createElement('div');
-        toast.className = `toast ${type}`;
-        toast.innerHTML = `
-            <i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i>
-            <span>${message}</span>
-        `;
-        
-        const container = document.getElementById('toast-container');
-        container.appendChild(toast);
-
-        setTimeout(() => {
-            toast.remove();
-        }, 3000);
-    }
-
-    static formatDate(dateString) {
-        return new Date(dateString).toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-        });
-    }
-
-    static formatDateTime(dateString) {
-        return new Date(dateString).toLocaleString('en-US', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-    }
-
-    static formatCurrency(amount) {
-        return new Intl.NumberFormat('en-IN', {
-            style: 'currency',
-            currency: 'INR'
-        }).format(amount);
-    }
-}
-
-// Auth Class
-class Auth {
-    static token = localStorage.getItem(config.TOKEN_KEY);
-    static role = null;
-
-    static async login(phone, password) {
-        try {
-            Utils.showSpinner();
-            const response = await fetch(`${config.API_URL}/login`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    phone: phone.toString(), // Ensure phone is sent as string
-                    password: password
-                })
-            });
-    
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || 'Login failed');
-            }
-    
-            const data = await response.json();
-            this.token = data.token;
-            this.role = data.role;
-            localStorage.setItem(config.TOKEN_KEY, data.token);
-            return true;
-        } catch (error) {
-            console.error('Login error:', error);
-            Utils.showToast(error.message, 'error');
-            return false;
-        } finally {
-            Utils.hideSpinner();
-        }
-    }
-
-    static logout() {
-        this.token = null;
-        this.role = null;
-        localStorage.removeItem(config.TOKEN_KEY);
-        window.location.reload();
-    }
-
-    static isAuthenticated() {
-        return !!this.token;
-    }
-
-    static isAdmin() {
-        return this.role === 'admin';
-    }
-}
-// API Class
-class API {
-    static async request(endpoint, options = {}) {
-        if (!Auth.token) {
-            throw new Error('No authentication token');
-        }
-
-        const defaultOptions = {
-            headers: {
-                'Authorization': Auth.token,
-                'Content-Type': 'application/json'
-            }
-        };
-
-        try {
-            Utils.showSpinner();
-            const response = await fetch(
-                `${config.API_URL}${endpoint}`,
-                { ...defaultOptions, ...options }
-            );
-
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.error || 'API request failed');
-            }
-
-            return await response.json();
-        } catch (error) {
-            console.error('API error:', error);
-            Utils.showToast(error.message, 'error');
-            throw error;
-        } finally {
-            Utils.hideSpinner();
-        }
-    }
-
-    // Tiffin APIs
-    static async getTiffins() {
-        return this.request('/tiffins/upcoming');
-    }
-
-    static async createTiffin(tiffinData) {
-        return this.request('/tiffins', {
-            method: 'POST',
-            body: JSON.stringify(tiffinData)
-        });
-    }
-
-    static async updateTiffinStatus(tiffinId, status) {
-        return this.request(`/tiffins/${tiffinId}/status`, {
-            method: 'PUT',
-            body: JSON.stringify({ status })
-        });
-    }
-
-    static async cancelTiffin(tiffinId) {
-        return this.request(`/tiffins/${tiffinId}/cancel`, {
-            method: 'POST'
-        });
-    }
-
-    // User APIs
-    static async getUsers() {
-        return this.request('/users');
-    }
-
-    static async createUser(userData) {
-        return this.request('/users', {
-            method: 'POST',
-            body: JSON.stringify(userData)
-        });
-    }
-
-    static async updateUser(userId, userData) {
-        return this.request(`/users/${userId}`, {
-            method: 'PUT',
-            body: JSON.stringify(userData)
-        });
-    }
-
-    // History APIs
-    static async getHistory() {
-        return this.request('/history');
-    }
-
-    // Invoice APIs
-    static async getInvoices(startDate, endDate) {
-        const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
-        return this.request(`/invoices?${params}`);
-    }
-
-    // Notice APIs
-    static async getNotices() {
-        return this.request('/notices');
-    }
-
-    static async createNotice(noticeData) {
-        return this.request('/notices', {
-            method: 'POST',
-            body: JSON.stringify(noticeData)
-        });
-    }
-
-    // Poll APIs
-    static async getActivePolls() {
-        return this.request('/polls/active');
-    }
-
-    static async createPoll(pollData) {
-        return this.request('/polls', {
-            method: 'POST',
-            body: JSON.stringify(pollData)
-        });
-    }
-
-    static async votePoll(pollId, option) {
-        return this.request(`/polls/${pollId}/vote`, {
-            method: 'POST',
-            body: JSON.stringify({ option })
-        });
-    }
-
-    // Special Request APIs
-    static async createRequest(requestData) {
-        return this.request('/requests', {
-            method: 'POST',
-            body: JSON.stringify(requestData)
-        });
-    }
-
-    static async getRequests() {
-        return this.request('/requests');
-    }
-}
-
-// UI Handler Class
-class UI {
-    static init() {
-        this.bindElements();
-        this.bindEvents();
-        this.checkAuth();
-        this.setupAutoRefresh();
-    }
-
-    static bindElements() {
-        this.elements = {
-            authSection: document.getElementById('auth-section'),
-            mainSection: document.getElementById('main-section'),
-            loginForm: document.getElementById('login-form'),
-            navLinks: document.querySelectorAll('.nav-link'),
-            pages: document.querySelectorAll('.page'),
-            logoutBtn: document.getElementById('logout-btn'),
-            mobileMenuBtn: document.querySelector('.mobile-menu-btn'),
-            navLinksContainer: document.querySelector('.nav-links'),
-            
-            // Forms
-            createTiffinForm: document.getElementById('create-tiffin-form'),
-            createUserForm: document.getElementById('create-user-form'),
-            createNoticeForm: document.getElementById('create-notice-form'),
-            createPollForm: document.getElementById('create-poll-form'),
-            specialRequestForm: document.getElementById('special-request-form'),
-            
-            // Containers
-            tiffinContainer: document.getElementById('tiffin-container'),
-            pollsContainer: document.getElementById('polls-container'),
-            noticesContainer: document.getElementById('notices-container'),
-            historyContainer: document.getElementById('history-container'),
-            invoicesContainer: document.getElementById('invoices-container'),
-            usersList: document.getElementById('users-list'),
-            specialRequestsList: document.getElementById('special-requests-list'),
-            
-            // Filter elements
-            invoiceStartDate: document.getElementById('invoice-start-date'),
-            invoiceEndDate: document.getElementById('invoice-end-date'),
-            filterInvoicesBtn: document.getElementById('filter-invoices'),
-            
-            // Poll options
-            addPollOptionBtn: document.getElementById('add-poll-option'),
-            pollOptionsContainer: document.getElementById('poll-options')
-        };
-    }
-
-    static bindEvents() {
-        // Auth events
-        this.elements.loginForm.addEventListener('submit', this.handleLogin.bind(this));
-        this.elements.logoutBtn.addEventListener('click', () => Auth.logout());
-
-        // Navigation events
-        this.elements.navLinks.forEach(link => {
-            link.addEventListener('click', (e) => {
-                if (link.dataset.page) {
-                    e.preventDefault();
-                    this.navigateToPage(link.dataset.page);
-                }
-            });
-        });
-
-        // Mobile menu
-        this.elements.mobileMenuBtn.addEventListener('click', () => {
-            this.elements.navLinksContainer.classList.toggle('active');
-        });
-
-        // Form submissions
-        if (this.elements.createTiffinForm) {
-            this.elements.createTiffinForm.addEventListener('submit', this.handleCreateTiffin.bind(this));
-        }
-        if (this.elements.createUserForm) {
-            this.elements.createUserForm.addEventListener('submit', this.handleCreateUser.bind(this));
-        }
-        if (this.elements.createNoticeForm) {
-            this.elements.createNoticeForm.addEventListener('submit', this.handleCreateNotice.bind(this));
-        }
-        if (this.elements.createPollForm) {
-            this.elements.createPollForm.addEventListener('submit', this.handleCreatePoll.bind(this));
-        }
-        if (this.elements.specialRequestForm) {
-            this.elements.specialRequestForm.addEventListener('submit', this.handleSpecialRequest.bind(this));
-        }
-
-        // Filter events
-        if (this.elements.filterInvoicesBtn) {
-            this.elements.filterInvoicesBtn.addEventListener('click', this.handleFilterInvoices.bind(this));
-        }
-
-        // Poll option addition
-        if (this.elements.addPollOptionBtn) {
-            this.elements.addPollOptionBtn.addEventListener('click', this.addPollOption.bind(this));
-        }
-    }
-
-    static async handleLogin(event) {
-        event.preventDefault();
-        
-        try {
-            const phoneInput = document.getElementById('phone');
-            const passwordInput = document.getElementById('password');
-            
-            const phone = phoneInput.value.trim();
-            const password = passwordInput.value.trim();
-            
-            if (!phone || !password) {
-                Utils.showToast('Please enter both phone and password', 'error');
-                return;
-            }
-
-            Utils.showSpinner();
-            
-            const response = await fetch(`${config.API_URL}/login`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json'
-                },
-                body: JSON.stringify({
-                    phone: phone,
-                    password: password
-                })
-            });
-
-            const data = await response.json();
-            
-            if (!response.ok) {
-                throw new Error(data.error || 'Login failed');
-            }
-
-            // Store authentication data
-            Auth.token = data.token;
-            Auth.role = data.role;
-            localStorage.setItem(config.TOKEN_KEY, data.token);
-
-            // Clear form
-            phoneInput.value = '';
-            passwordInput.value = '';
-
-            // Update UI
-            Utils.showToast('Login successful');
-            this.checkAuth();
-            
-        } catch (error) {
-            console.error('Login error:', error);
-            Utils.showToast(error.message || 'Login failed', 'error');
-        } finally {
-            Utils.hideSpinner();
-        }
-    }
-    static checkAuth() {
-        if (Auth.isAuthenticated()) {
-            this.elements.authSection.classList.add('hidden');
-            this.elements.mainSection.classList.remove('hidden');
-            
-            // Show/hide admin features
-            document.querySelectorAll('.admin-only').forEach(el => {
-                el.style.display = Auth.isAdmin() ? 'block' : 'none';
-            });
-            
-            this.loadHomePage();
-        } else {
-            this.elements.authSection.classList.remove('hidden');
-            this.elements.mainSection.classList.add('hidden');
-        }
-    }
-
-    static navigateToPage(pageId) {
-        this.elements.pages.forEach(page => page.classList.add('hidden'));
-        document.getElementById(`${pageId}-page`)?.classList.remove('hidden');
-        
-        this.elements.navLinks.forEach(link => {
-            link.classList.toggle('active', link.dataset.page === pageId);
-        });
-
-        // Close mobile menu
-        this.elements.navLinksContainer.classList.remove('active');
-
-        // Load page data
-        switch (pageId) {
-            case 'home': this.loadHomePage(); break;
-            case 'history': this.loadHistory(); break;
-            case 'invoices': this.loadInvoices(); break;
-            case 'notices': this.loadNotices(); break;
-            case 'admin': this.loadAdminDashboard(); break;
-        }
-    }
-
-    static async loadHomePage() {
-        try {
-            const [tiffinsData, pollsData, noticesData] = await Promise.all([
-                API.getTiffins(),
-                API.getActivePolls(),
-                API.getNotices()
-            ]);
-
-            this.renderTiffins(tiffinsData.tiffins);
-            this.renderPolls(pollsData.polls);
-            this.renderNotices(noticesData.notices, this.elements.noticesContainer);
-        } catch (error) {
-            console.error('Error loading home page:', error);
-        }
-    }
-
-    static renderTiffins(tiffins) {
-        this.elements.tiffinContainer.innerHTML = tiffins.map(tiffin => `
-            <div class="card">
-                <h3>${tiffin.name}</h3>
-                <p>${tiffin.description}</p>
-                <p>Price: ${Utils.formatCurrency(tiffin.price)}</p>
-                <p>Time: ${tiffin.time_slot}</p>
-                <p>Date: ${Utils.formatDate(tiffin.date)}</p>
-                <p>Status: <span class="status status-${tiffin.status.toLowerCase()}">${tiffin.status}</span></p>
-                ${new Date(tiffin.cancellation_time) > new Date() ? 
-                    `<button class="btn btn-primary" onclick="UI.handleCancelTiffin('${tiffin._id}')">
-                        <i class="fas fa-times"></i> Cancel
-                    </button>` : 
-                    '<p class="error">Cancellation period ended</p>'}
-            </div>
-        `).join('');
-    }
-
-    static renderPolls(polls) {
-        this.elements.pollsContainer.innerHTML = polls.map(poll => `
-            <div class="card">
-                <h3>${poll.question}</h3>
-                <div class="poll-options">
-                    ${Object.entries(poll.votes).map(([option, votes]) => `
-                        <button class="btn btn-primary mb-1" onclick="UI.handleVote('${poll._id}', '${option}')">
-                            ${option} (${votes.length} votes)
-                        </button>
-                    `).join('')}
+                <div class="theme-toggle">
+                    <button id="theme-toggle-btn">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" class="theme-light">
+                            <path fill="none" d="M0 0h24v24H0z"/>
+                            <path d="M12 18a6 6 0 1 1 0-12 6 6 0 0 1 0 12zm0-2a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM11 1h2v3h-2V1zm0 19h2v3h-2v-3zM3.515 4.929l1.414-1.414L7.05 5.636 5.636 7.05 3.515 4.93zM16.95 18.364l1.414-1.414 2.121 2.121-1.414 1.414-2.121-2.121zm2.121-14.85l1.414 1.415-2.121 2.121-1.414-1.414 2.121-2.121zM5.636 16.95l1.414 1.414-2.121 2.121-1.414-1.414 2.121-2.121zM23 11v2h-3v-2h3zM4 11v2H1v-2h3z"/>
+                        </svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" class="theme-dark hidden">
+                            <path fill="none" d="M0 0h24v24H0z"/>
+                            <path d="M11.38 2.019a7.5 7.5 0 1 0 10.6 10.6C21.662 17.854 17.316 22 12.001 22 6.477 22 2 17.523 2 12c0-5.315 4.146-9.661 9.38-9.981z"/>
+                        </svg>
+                    </button>
                 </div>
-                <p class="mt-1">
-                    ${Utils.formatDate(poll.start_date)} - ${Utils.formatDate(poll.end_date)}
-                </p>
             </div>
-        `).join('');
-    }
 
-    static renderNotices(notices, container) {
-        container.innerHTML = notices.map(notice => `
-            <div class="card">
-                <h3>${notice.title}</h3>
-                <p>${notice.content}</p>
-                <small>Posted: ${Utils.formatDateTime(notice.created_at)}</small>
-            </div>
-        `).join('');
-    }
-
-    static async loadHistory() {
-        try {
-            const data = await API.getHistory();
-            this.elements.historyContainer.innerHTML = data.history.map(tiffin => `
-                <div class="card">
-                    <h3>${tiffin.name}</h3>
-                    <p>${tiffin.description}</p>
-                    <p>Price: ${Utils.formatCurrency(tiffin.price)}</p>
-                    <p>Date: ${Utils.formatDate(tiffin.date)}</p>
-                    <p>Status: <span class="status status-${tiffin.status.toLowerCase()}">${tiffin.status}</span></p>
-                </div>
-            `).join('');
-        } catch (error) {
-            console.error('Error loading history:', error);
-        }
-    }
-
-    static async loadInvoices() {
-        if (!this.elements.invoiceStartDate.value || !this.elements.invoiceEndDate.value) {
-            const today = new Date();
-            const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-            this.elements.invoiceStartDate.value = firstDay.toISOString().split('T')[0];
-            this.elements.invoiceEndDate.value = today.toISOString().split('T')[0];
-        }
-        await this.handleFilterInvoices();
-    }
-
-    static async handleFilterInvoices() {
-        try {
-            const data = await API.getInvoices(
-                this.elements.invoiceStartDate.value,
-                this.elements.invoiceEndDate.value
-            );
-
-            this.elements.invoicesContainer.innerHTML = `
-                <div class="card">
-                    <h3>Total Amount: ${Utils.formatCurrency(data.total_amount)}</h3>
-                    ${data.tiffins.map(tiffin => `
-                        <div class="mt-1">
-                            <p>${tiffin.name} - ${Utils.formatDate(tiffin.date)}</p>
-                            <p>Price: ${Utils.formatCurrency(tiffin.price)}</p>
+            <!-- Page Content Container -->
+            <div class="page-container">
+                <!-- Dashboard Page -->
+                <div id="dashboard-page" class="page active">
+                    <h1 class="page-title">Dashboard</h1>
+                    
+                    <div class="dashboard-notices">
+                        <div class="section-header">
+                            <h2>Important Notices</h2>
                         </div>
-                    `).join('')}
+                        <div class="notices-container" id="notices-container">
+                            <!-- Notices will be loaded here -->
+                            <div class="empty-state">
+                                <img src="empty-notices.svg" alt="No notices">
+                                <p>No active notices at the moment</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="dashboard-stats">
+                        <div class="stat-card">
+                            <div class="stat-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                    <path fill="none" d="M0 0h24v24H0z"/>
+                                    <path d="M17 1v4h4v16H3V5h4V1h10zm-2 2H9v2h6V3zM5 7v12h14V7H5z"/>
+                                </svg>
+                            </div>
+                            <div class="stat-content">
+                                <h3>Today's Tiffin</h3>
+                                <p id="today-tiffin-status">Loading...</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                    <path fill="none" d="M0 0h24v24H0z"/>
+                                    <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm0-2a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm1-8h4v2h-6V7h2v5z"/>
+                                </svg>
+                            </div>
+                            <div class="stat-content">
+                                <h3>Next Delivery</h3>
+                                <p id="next-delivery-time">Loading...</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                    <path fill="none" d="M0 0h24v24H0z"/>
+                                    <path d="M20 22H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1zm-1-2V4H5v16h14zM8 7h8v2H8V7zm0 4h8v2H8v-2zm0 4h8v2H8v-2z"/>
+                                </svg>
+                            </div>
+                            <div class="stat-content">
+                                <h3>This Month</h3>
+                                <p id="month-tiffin-count">Loading...</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="dashboard-active-polls">
+                        <div class="section-header">
+                            <h2>Active Polls</h2>
+                        </div>
+                        <div class="polls-container" id="polls-container">
+                            <!-- Polls will be loaded here -->
+                            <div class="empty-state">
+                                <img src="empty-polls.svg" alt="No polls">
+                                <p>No active polls at the moment</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="dashboard-upcoming">
+                        <div class="section-header">
+                            <h2>Upcoming Tiffins</h2>
+                            <button id="request-tiffin-btn" class="action-button">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16">
+                                    <path fill="none" d="M0 0h24v24H0z"/>
+                                    <path d="M11 11V5h2v6h6v2h-6v6h-2v-6H5v-2z"/>
+                                </svg>
+                                Request Special
+                            </button>
+                        </div>
+                        <div class="upcoming-tiffins" id="upcoming-tiffins">
+                            <!-- Upcoming tiffins will be loaded here -->
+                            <div class="empty-state">
+                                <img src="empty-tiffins.svg" alt="No upcoming tiffins">
+                                <p>No upcoming tiffins scheduled</p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-            `;
-        } catch (error) {
-            console.error('Error loading invoices:', error);
-        }
-    }
-
-    static async loadNotices() {
-        try {
-            const data = await API.getNotices();
-            this.renderNotices(data.notices, document.getElementById('all-notices-container'));
-        } catch (error) {
-            console.error('Error loading notices:', error);
-        }
-    }
-
-    static async loadAdminDashboard() {
-        if (!Auth.isAdmin()) return;
-
-        try {
-            const [users, requests] = await Promise.all([
-                API.getUsers(),
-                API.getRequests()
-            ]);
-
-            // Render users
-            this.elements.usersList.innerHTML = users.users.map(user => `
-                <div class="card">
-                    <p>Phone: ${user.phone}</p>
-                    <p>Role: ${user.role}</p>
-                    <p>Created: ${Utils.formatDateTime(user.created_at)}</p>
+                
+                <!-- My Tiffins Page -->
+                <div id="tiffins-page" class="page">
+                    <h1 class="page-title">My Tiffins</h1>
+                    
+                    <div class="tiffins-filter">
+                        <div class="filter-group">
+                            <label for="tiffin-date-filter">Date</label>
+                            <input type="date" id="tiffin-date-filter">
+                        </div>
+                        <div class="filter-group">
+                            <label for="tiffin-time-filter">Time</label>
+                            <select id="tiffin-time-filter">
+                                <option value="">All Times</option>
+                                <option value="morning">Morning</option>
+                                <option value="afternoon">Afternoon</option>
+                                <option value="evening">Evening</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="tiffin-status-filter">Status</label>
+                            <select id="tiffin-status-filter">
+                                <option value="">All Statuses</option>
+                                <option value="scheduled">Scheduled</option>
+                                <option value="preparing">Preparing</option>
+                                <option value="prepared">Prepared</option>
+                                <option value="out_for_delivery">Out for Delivery</option>
+                                <option value="delivered">Delivered</option>
+                                <option value="cancelled">Cancelled</option>
+                            </select>
+                        </div>
+                        <button id="apply-tiffin-filter" class="filter-button">Apply</button>
+                        <button id="reset-tiffin-filter" class="filter-button">Reset</button>
+                    </div>
+                    
+                    <div class="tiffins-list" id="tiffins-list">
+                        <!-- Tiffins will be loaded here -->
+                        <div class="empty-state">
+                            <img src="empty-tiffins.svg" alt="No tiffins">
+                            <p>No tiffins found</p>
+                        </div>
+                    </div>
                 </div>
-            `).join('');
-
-            // Render special requests
-            this.elements.specialRequestsList.innerHTML = requests.requests.map(request => `
-                <div class="card">
-                    <p>User: ${request.user_id}</p>
-                    <p>${request.description}</p>
-                    <p>Date: ${Utils.formatDate(request.date)}</p>
-                    <p>Status: ${request.status}</p>
+                
+                <!-- History Page -->
+                <div id="history-page" class="page">
+                    <h1 class="page-title">Tiffin History</h1>
+                    
+                    <div class="history-filter">
+                        <div class="filter-group">
+                            <label for="history-start-date">Start Date</label>
+                            <input type="date" id="history-start-date">
+                        </div>
+                        <div class="filter-group">
+                            <label for="history-end-date">End Date</label>
+                            <input type="date" id="history-end-date">
+                        </div>
+                        <button id="apply-history-filter" class="filter-button">Apply</button>
+                        <button id="reset-history-filter" class="filter-button">Reset</button>
+                    </div>
+                    
+                    <div class="history-stats">
+                        <div class="stat-card">
+                            <div class="stat-content">
+                                <h3>Total Tiffins</h3>
+                                <p id="total-tiffins-count">0</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-content">
+                                <h3>Total Spent</h3>
+                                <p id="total-tiffins-spent">₹0</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-content">
+                                <h3>Most Ordered</h3>
+                                <p id="most-ordered-time">N/A</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="history-list" id="history-list">
+                        <!-- History will be loaded here -->
+                        <div class="empty-state">
+                            <img src="empty-history.svg" alt="No history">
+                            <p>No tiffin history found</p>
+                        </div>
+                    </div>
                 </div>
-            `).join('');
-        } catch (error) {
-            console.error('Error loading admin dashboard:', error);
-        }
-    }
+                
+                <!-- Invoices Page -->
+                <div id="invoices-page" class="page">
+                    <h1 class="page-title">My Invoices</h1>
+                    
+                    <div class="invoices-list" id="invoices-list">
+                        <!-- Invoices will be loaded here -->
+                        <div class="empty-state">
+                            <img src="empty-invoices.svg" alt="No invoices">
+                            <p>No invoices found</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Profile Page -->
+                <div id="profile-page" class="page">
+                    <h1 class="page-title">My Profile</h1>
+                    
+                    <div class="profile-container">
+                        <div class="profile-card">
+                            <div class="profile-header">
+                                <div class="profile-avatar">
+                                    <span id="profile-initial"></span>
+                                </div>
+                                <div class="profile-info">
+                                    <h2 id="profile-name">User Name</h2>
+                                    <p id="profile-id">User ID: <span id="profile-user-id"></span></p>
+                                </div>
+                            </div>
+                            
+                            <div class="profile-details">
+                                <div class="profile-section">
+                                    <h3>Personal Information</h3>
+                                    <div class="profile-form">
+                                        <div class="form-group">
+                                            <label for="profile-edit-name">Full Name</label>
+                                                                                        <input type="text" id="profile-edit-name">
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="profile-edit-email">Email</label>
+                                            <input type="email" id="profile-edit-email">
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="profile-edit-address">Delivery Address</label>
+                                            <textarea id="profile-edit-address"></textarea>
+                                        </div>
+                                        <button id="save-profile" class="action-button">Save Changes</button>
+                                    </div>
+                                </div>
+                                
+                                <div class="profile-section">
+                                    <h3>Change Password</h3>
+                                    <div class="profile-form">
+                                        <div class="form-group">
+                                            <label for="current-password">Current Password</label>
+                                            <input type="password" id="current-password">
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="new-password">New Password</label>
+                                            <input type="password" id="new-password">
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="confirm-password">Confirm New Password</label>
+                                            <input type="password" id="confirm-password">
+                                        </div>
+                                        <button id="change-password" class="action-button">Update Password</button>
+                                    </div>
+                                </div>
+                                
+                                <div class="profile-section">
+                                    <h3>Account Statistics</h3>
+                                    <div class="profile-stats">
+                                        <div class="stat-item">
+                                            <span class="stat-label">Member Since</span>
+                                            <span class="stat-value" id="member-since">Loading...</span>
+                                        </div>
+                                        <div class="stat-item">
+                                            <span class="stat-label">Total Tiffins</span>
+                                            <span class="stat-value" id="profile-total-tiffins">Loading...</span>
+                                        </div>
+                                        <div class="stat-item">
+                                            <span class="stat-label">Most Ordered Time</span>
+                                            <span class="stat-value" id="profile-most-ordered">Loading...</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Admin Dashboard Page -->
+                <div id="admin-dashboard-page" class="page">
+                    <h1 class="page-title">Admin Dashboard</h1>
+                    
+                    <div class="admin-stats">
+                        <div class="stat-card">
+                            <div class="stat-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                    <path fill="none" d="M0 0h24v24H0z"/>
+                                    <path d="M2 22a8 8 0 1 1 16 0H2zm8-9c-3.315 0-6-2.685-6-6s2.685-6 6-6 6 2.685 6 6-2.685 6-6 6zm7.363 2.233A7.505 7.505 0 0 1 22.983 22H20c0-2.61-1-4.986-2.637-6.767zm-2.023-2.276A7.98 7.98 0 0 0 18 7a7.964 7.964 0 0 0-1.015-3.903A5 5 0 0 1 21 8a4.999 4.999 0 0 1-5.66 4.957z"/>
+                                </svg>
+                            </div>
+                            <div class="stat-content">
+                                <h3>Active Users</h3>
+                                <p id="active-users-count">Loading...</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                    <path fill="none" d="M0 0h24v24H0z"/>
+                                    <path d="M17 1v4h4v16H3V5h4V1h10zm-2 2H9v2h6V3zM5 7v12h14V7H5z"/>
+                                </svg>
+                            </div>
+                            <div class="stat-content">
+                                <h3>Active Tiffins</h3>
+                                <p id="active-tiffins-count">Loading...</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                    <path fill="none" d="M0 0h24v24H0z"/>
+                                    <path d="M3 3h18a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm17 8H4v8h16v-8zm0-2V5H4v4h16zm-5 7h4v2h-4v-2z"/>
+                                </svg>
+                            </div>
+                            <div class="stat-content">
+                                <h3>Monthly Revenue</h3>
+                                <p id="monthly-revenue">Loading...</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                    <path fill="none" d="M0 0h24v24H0z"/>
+                                    <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm0-2a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm1-8h4v2h-6V7h2v5z"/>
+                                </svg>
+                            </div>
+                            <div class="stat-content">
+                                <h3>Today's Deliveries</h3>
+                                <p id="today-deliveries">Loading...</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="admin-quick-actions">
+                        <div class="section-header">
+                            <h2>Quick Actions</h2>
+                        </div>
+                        <div class="quick-actions-grid">
+                            <a href="#manage-users" class="quick-action-card" data-page="manage-users">
+                                <div class="quick-action-icon">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                        <path fill="none" d="M0 0h24v24H0z"/>
+                                        <path d="M2 22a8 8 0 1 1 16 0H2zm8-9c-3.315 0-6-2.685-6-6s2.685-6 6-6 6 2.685 6 6-2.685 6-6 6zm10 4h4v2h-4v-2zm-3-5h7v2h-7v-2zm2-5h5v2h-5V7z"/>
+                                    </svg>
+                                </div>
+                                <h3>Manage Users</h3>
+                                <p>Add, edit or deactivate users</p>
+                            </a>
+                            <a href="#manage-tiffins" class="quick-action-card" data-page="manage-tiffins">
+                                <div class="quick-action-icon">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                        <path fill="none" d="M0 0h24v24H0z"/>
+                                        <path d="M19 22H5a3 3 0 0 1-3-3V3a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v12h4v4a3 3 0 0 1-3 3zm-1-5v2a1 1 0 0 0 2 0v-2h-2zm-2 3V4H4v15a1 1 0 0 0 1 1h11zM6 7h8v2H6V7zm0 4h8v2H6v-2zm0 4h5v2H6v-2z"/>
+                                    </svg>
+                                </div>
+                                <h3>Manage Tiffins</h3>
+                                <p>Create and update tiffin schedules</p>
+                            </a>
+                            <a href="#notices-polls" class="quick-action-card" data-page="notices-polls">
+                                <div class="quick-action-icon">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                        <path fill="none" d="M0 0h24v24H0z"/>
+                                        <path d="M20 17h2v2H2v-2h2v-7a8 8 0 1 1 16 0v7zm-2 0v-7a6 6 0 1 0-12 0v7h12zm-9 4h6v2H9v-2z"/>
+                                    </svg>
+                                </div>
+                                <h3>Notices & Polls</h3>
+                                <p>Create announcements and user polls</p>
+                            </a>
+                            <a href="#generate-invoices" class="quick-action-card" data-page="generate-invoices">
+                                <div class="quick-action-icon">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+                                        <path fill="none" d="M0 0h24v24H0z"/>
+                                        <path d="M17 14h5v6H2v-6h5v2h10v-2zM3 3h18v10h-5v2H8v-2H3V3zm2 2v6h16V5H5z"/>
+                                    </svg>
+                                </div>
+                                <h3>Generate Invoices</h3>
+                                <p>Create and manage customer invoices</p>
+                            </a>
+                        </div>
+                    </div>
+                    
+                    <div class="admin-pending-requests">
+                        <div class="section-header">
+                            <h2>Pending Special Requests</h2>
+                        </div>
+                        <div class="pending-requests-list" id="pending-requests-list">
+                            <!-- Pending requests will be loaded here -->
+                            <div class="empty-state">
+                                <img src="empty-requests.svg" alt="No requests">
+                                <p>No pending special requests</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                
+                <!-- Manage Users Page -->
+                <div id="manage-users-page" class="page">
+                    <h1 class="page-title">Manage Users</h1>
+                    
+                    <div class="manage-users-actions">
+                        <button id="add-user-btn" class="action-button">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16">
+                                <path fill="none" d="M0 0h24v24H0z"/>
+                                <path d="M11 11V5h2v6h6v2h-6v6h-2v-6H5v-2z"/>
+                            </svg>
+                            Add New User
+                        </button>
+                        <div class="search-filter">
+                            <input type="text" id="user-search" placeholder="Search users...">
+                        </div>
+                    </div>
+                    
+                    <div class="users-list" id="users-list">
+                        <!-- Users will be loaded here -->
+                        <div class="empty-state">
+                            <img src="empty-users.svg" alt="No users">
+                            <p>No users found</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Manage Tiffins Page -->
+                <div id="manage-tiffins-page" class="page">
+                    <h1 class="page-title">Manage Tiffins</h1>
+                    
+                    <div class="tiffin-management-tabs">
+                        <button class="tab-btn active" data-tab="create-tiffin">Create Tiffin</button>
+                        <button class="tab-btn" data-tab="manage-tiffin">Manage Existing</button>
+                        <button class="tab-btn" data-tab="batch-create">Batch Create</button>
+                    </div>
+                    
+                    <div class="tiffin-tab-content">
+                        <div id="create-tiffin-tab" class="tab-pane active">
+                            <div class="create-tiffin-form">
+                                <div class="form-group">
+                                    <label for="tiffin-date">Date</label>
+                                    <input type="date" id="tiffin-date" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="tiffin-time">Time Slot</label>
+                                    <select id="tiffin-time" required>
+                                        <option value="">Select Time</option>
+                                        <option value="morning">Morning</option>
+                                        <option value="afternoon">Afternoon</option>
+                                        <option value="evening">Evening</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="tiffin-description">Description</label>
+                                    <textarea id="tiffin-description" required placeholder="Describe the tiffin contents"></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label for="tiffin-price">Price (₹)</label>
+                                    <input type="number" id="tiffin-price" required min="0" step="0.01">
+                                </div>
+                                <div class="form-group">
+                                    <label for="tiffin-cancellation">Cancellation Time</label>
+                                    <input type="time" id="tiffin-cancellation" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="tiffin-delivery">Delivery Time</label>
+                                                                        <input type="time" id="tiffin-delivery" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="tiffin-menu-items">Menu Items</label>
+                                    <div class="menu-items-container">
+                                        <div class="menu-item-input">
+                                            <input type="text" class="menu-item" placeholder="Menu item">
+                                            <button type="button" class="add-menu-item">+</button>
+                                        </div>
+                                        <div id="menu-items-list"></div>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="tiffin-users">Assign Users</label>
+                                    <div class="user-select-container">
+                                        <select id="tiffin-users" multiple>
+                                            <!-- Users will be loaded here -->
+                                        </select>
+                                    </div>
+                                </div>
+                                <button id="create-tiffin-btn" class="action-button">Create Tiffin</button>
+                            </div>
+                        </div>
+                        
+                        <div id="manage-tiffin-tab" class="tab-pane">
+                            <div class="manage-tiffins-filter">
+                                <div class="filter-group">
+                                    <label for="manage-tiffin-date">Date</label>
+                                    <input type="date" id="manage-tiffin-date">
+                                </div>
+                                <div class="filter-group">
+                                    <label for="manage-tiffin-status">Status</label>
+                                    <select id="manage-tiffin-status">
+                                        <option value="">All Statuses</option>
+                                        <option value="scheduled">Scheduled</option>
+                                        <option value="preparing">Preparing</option>
+                                        <option value="prepared">Prepared</option>
+                                        <option value="out_for_delivery">Out for Delivery</option>
+                                        <option value="delivered">Delivered</option>
+                                        <option value="cancelled">Cancelled</option>
+                                    </select>
+                                </div>
+                                <button id="apply-manage-filter" class="filter-button">Apply</button>
+                                <button id="reset-manage-filter" class="filter-button">Reset</button>
+                            </div>
+                            
+                            <div class="manage-tiffins-list" id="manage-tiffins-list">
+                                <!-- Tiffins will be loaded here -->
+                                <div class="empty-state">
+                                    <img src="empty-tiffins.svg" alt="No tiffins">
+                                    <p>No tiffins found</p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div id="batch-create-tab" class="tab-pane">
+                            <div class="batch-create-form">
+                                <div class="form-section">
+                                    <h3>Tiffin Details</h3>
+                                    <div class="form-group">
+                                        <label for="batch-tiffin-date">Date</label>
+                                        <input type="date" id="batch-tiffin-date" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="batch-tiffin-time">Time Slot</label>
+                                        <select id="batch-tiffin-time" required>
+                                            <option value="">Select Time</option>
+                                            <option value="morning">Morning</option>
+                                            <option value="afternoon">Afternoon</option>
+                                            <option value="evening">Evening</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="batch-tiffin-description">Description</label>
+                                        <textarea id="batch-tiffin-description" required placeholder="Describe the tiffin contents"></textarea>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="batch-tiffin-price">Price (₹)</label>
+                                        <input type="number" id="batch-tiffin-price" required min="0" step="0.01">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="batch-tiffin-cancellation">Cancellation Time</label>
+                                        <input type="time" id="batch-tiffin-cancellation" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="batch-tiffin-delivery">Delivery Time</label>
+                                        <input type="time" id="batch-tiffin-delivery" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="batch-tiffin-menu-items">Menu Items</label>
+                                        <div class="menu-items-container">
+                                            <div class="menu-item-input">
+                                                <input type="text" class="batch-menu-item" placeholder="Menu item">
+                                                <button type="button" class="add-batch-menu-item">+</button>
+                                            </div>
+                                            <div id="batch-menu-items-list"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="form-section">
+                                    <h3>User Groups</h3>
+                                    <p class="help-text">Create groups of users to assign different tiffins</p>
+                                    
+                                    <div class="user-groups-container" id="user-groups-container">
+                                        <div class="user-group">
+                                            <h4>Group 1</h4>
+                                            <div class="user-group-select">
+                                                <select class="user-group-select-input" multiple>
+                                                    <!-- Users will be loaded here -->
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <button id="add-user-group" class="secondary-button">
+                                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16">
+                                                <path fill="none" d="M0 0h24v24H0z"/>
+                                                <path d="M11 11V5h2v6h6v2h-6v6h-2v-6H5v-2z"/>
+                                            </svg>
+                                            Add Another Group
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <button id="batch-create-btn" class="action-button">Create Batch Tiffins</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Notices & Polls Page -->
+                <div id="notices-polls-page" class="page">
+                    <h1 class="page-title">Notices & Polls</h1>
+                    
+                    <div class="notices-polls-tabs">
+                        <button class="tab-btn active" data-tab="notices">Notices</button>
+                        <button class="tab-btn" data-tab="polls">Polls</button>
+                    </div>
+                    
+                    <div class="notices-polls-tab-content">
+                        <div id="notices-tab" class="tab-pane active">
+                            <div class="notices-actions">
+                                <button id="add-notice-btn" class="action-button">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16">
+                                        <path fill="none" d="M0 0h24v24H0z"/>
+                                        <path d="M11 11V5h2v6h6v2h-6v6h-2v-6H5v-2z"/>
+                                    </svg>
+                                    Create Notice
+                                </button>
+                            </div>
+                            
+                            <div class="notices-list" id="admin-notices-list">
+                                <!-- Notices will be loaded here -->
+                                <div class="empty-state">
+                                    <img src="empty-notices.svg" alt="No notices">
+                                    <p>No notices found</p>
+                                </div>
+                            </div>
+                            
+                            <div id="create-notice-modal" class="modal">
+                                <div class="modal-content">
+                                    <div class="modal-header">
+                                        <h2>Create Notice</h2>
+                                        <button class="close-modal">&times;</button>
+                                    </div>
+                                    <div class="modal-body">
+                                        <div class="form-group">
+                                            <label for="notice-title">Title</label>
+                                            <input type="text" id="notice-title" required>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="notice-content">Content</label>
+                                            <textarea id="notice-content" required></textarea>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="notice-priority">Priority</label>
+                                            <select id="notice-priority">
+                                                <option value="0">Normal</option>
+                                                <option value="1">Important</option>
+                                                <option value="2">Urgent</option>
+                                            </select>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="notice-expires">Expires At (Optional)</label>
+                                            <input type="datetime-local" id="notice-expires">
+                                        </div>
+                                        <button id="submit-notice" class="action-button">Create Notice</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div id="polls-tab" class="tab-pane">
+                            <div class="polls-actions">
+                                <button id="add-poll-btn" class="action-button">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16">
+                                        <path fill="none" d="M0 0h24v24H0z"/>
+                                        <path d="M11 11V5h2v6h6v2h-6v6h-2v-6H5v-2z"/>
+                                    </svg>
+                                    Create Poll
+                                </button>
+                            </div>
+                            
+                            <div class="polls-list" id="admin-polls-list">
+                                <!-- Polls will be loaded here -->
+                                <div class="empty-state">
+                                    <img src="empty-polls.svg" alt="No polls">
+                                    <p>No polls found</p>
+                                </div>
+                            </div>
+                            
+                            <div id="create-poll-modal" class="modal">
+                                <div class="modal-content">
+                                    <div class="modal-header">
+                                        <h2>Create Poll</h2>
+                                        <button class="close-modal">&times;</button>
+                                    </div>
+                                    <div class="modal-body">
+                                        <div class="form-group">
+                                            <label for="poll-question">Question</label>
+                                            <input type="text" id="poll-question" required>
+                                        </div>
+                                        <div class="form-group">
+                                            <label>Options</label>
+                                            <div class="poll-options-container" id="poll-options-container">
+                                                <div class="poll-option-input">
+                                                    <input type="text" class="poll-option" placeholder="Option 1">
+                                                </div>
+                                                <div class="poll-option-input">
+                                                    <input type="text" class="poll-option" placeholder="Option 2">
+                                                </div>
+                                            </div>
+                                            <button type="button" id="add-poll-option" class="secondary-button">
+                                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16">
+                                                    <path fill="none" d="M0 0h24v24H0z"/>
+                                                    <path d="M11 11V5h2v6h6v2h-6v6h-2v-6H5v-2z"/>
+                                                </svg>
+                                                Add Option
+                                            </button>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="poll-start-date">Start Date</label>
+                                            <input type="datetime-local" id="poll-start-date" required>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="poll-end-date">End Date</label>
+                                            <input type="datetime-local" id="poll-end-date" required>
+                                        </div>
+                                        <button id="submit-poll" class="action-button">Create Poll</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Generate Invoices Page -->
+                <div id="generate-invoices-page" class="page">
+                    <h1 class="page-title">Generate Invoices</h1>
+                    
+                    <div class="generate-invoice-form">
+                        <div class="form-group">
+                            <label for="invoice-start-date">Start Date</label>
+                            <input type="date" id="invoice-start-date" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="invoice-end-date">End Date</label>
+                            <input type="date" id="invoice-end-date" required>
+                        </div>
+                        <button id="generate-invoices-btn" class="action-button">Generate Invoices</button>
+                    </div>
+                    
+                    <div class="invoice-management">
+                        <div class="section-header">
+                            <h2>Manage Invoices</h2>
+                        </div>
+                        
+                        <div class="invoices-filter">
+                            <div class="filter-group">
+                                <label for="invoice-filter-month">Month</label>
+                                <input type="month" id="invoice-filter-month">
+                            </div>
+                            <div class="filter-group">
+                                <label for="invoice-filter-status">Status</label>
+                                <select id="invoice-filter-status">
+                                    <option value="">All</option>
+                                    <option value="paid">Paid</option>
+                                    <option value="unpaid">Unpaid</option>
+                                </select>
+                            </div>
+                            <button id="apply-invoice-filter" class="filter-button">Apply</button>
+                            <button id="reset-invoice-filter" class="filter-button">Reset</button>
+                        </div>
+                        
+                        <div class="admin-invoices-list" id="admin-invoices-list">
+                            <!-- Invoices will be loaded here -->
+                            <div class="empty-state">
+                                <img src="empty-invoices.svg" alt="No invoices">
+                                <p>No invoices found</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
-    static async handleCancelTiffin(tiffinId) {
-        try {
-            await API.cancelTiffin(tiffinId);
-            Utils.showToast('Tiffin cancelled successfully');
-            this.loadHomePage();
-        } catch (error) {
-            Utils.showToast('Failed to cancel tiffin', 'error');
-        }
-    }
+    <!-- Modals -->
+    <div id="request-tiffin-modal" class="modal">
+                <div class="modal-content">
+            <div class="modal-header">
+                <h2>Request Special Tiffin</h2>
+                <button class="close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="request-description">Description</label>
+                    <textarea id="request-description" placeholder="Describe your special tiffin request" required></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="request-date">Preferred Date</label>
+                    <input type="date" id="request-date" required>
+                </div>
+                <div class="form-group">
+                    <label for="request-time">Preferred Time</label>
+                    <select id="request-time" required>
+                        <option value="">Select Time</option>
+                        <option value="morning">Morning</option>
+                        <option value="afternoon">Afternoon</option>
+                        <option value="evening">Evening</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="request-instructions">Special Instructions (Optional)</label>
+                    <textarea id="request-instructions" placeholder="Any special instructions"></textarea>
+                </div>
+                <button id="submit-request" class="action-button">Submit Request</button>
+            </div>
+        </div>
+    </div>
 
-    static async handleVote(pollId, option) {
-        try {
-            await API.votePoll(pollId, option);
-            Utils.showToast('Vote recorded successfully');
-            this.loadHomePage();
-        } catch (error) {
-            Utils.showToast('Failed to record vote', 'error');
-        }
-    }
+    <div id="user-details-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>User Details</h2>
+                <button class="close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="user-details-content">
+                    <div class="user-details-header">
+                        <div class="user-avatar large">
+                            <span id="user-details-initial"></span>
+                        </div>
+                        <div class="user-details-info">
+                            <h3 id="user-details-name">User Name</h3>
+                            <p id="user-details-id">User ID: <span id="user-details-user-id"></span></p>
+                            <p id="user-details-email">Email: <span id="user-details-user-email"></span></p>
+                        </div>
+                    </div>
+                    
+                    <div class="user-details-section">
+                        <h3>Address</h3>
+                        <p id="user-details-address"></p>
+                    </div>
+                    
+                    <div class="user-details-section">
+                        <h3>Account Statistics</h3>
+                        <div class="user-details-stats">
+                            <div class="stat-item">
+                                <span class="stat-label">Member Since</span>
+                                <span class="stat-value" id="user-details-member-since">Loading...</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Total Tiffins</span>
+                                <span class="stat-value" id="user-details-total-tiffins">Loading...</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Cancelled Tiffins</span>
+                                <span class="stat-value" id="user-details-cancelled-tiffins">Loading...</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Total Spent</span>
+                                <span class="stat-value" id="user-details-total-spent">Loading...</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="user-details-actions">
+                        <button id="edit-user-btn" class="secondary-button">Edit User</button>
+                        <button id="toggle-user-status-btn" class="warning-button">Deactivate User</button>
+                    </div>
+                </div>
+                
+                <div class="edit-user-form hidden">
+                    <div class="form-group">
+                        <label for="edit-user-name">Name</label>
+                        <input type="text" id="edit-user-name">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-user-email">Email</label>
+                        <input type="email" id="edit-user-email">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-user-address">Address</label>
+                        <textarea id="edit-user-address"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-user-active">Status</label>
+                        <select id="edit-user-active">
+                            <option value="true">Active</option>
+                            <option value="false">Inactive</option>
+                        </select>
+                    </div>
+                    <div class="form-actions">
+                        <button id="save-user-btn" class="action-button">Save Changes</button>
+                        <button id="cancel-edit-user-btn" class="secondary-button">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
-    static async handleCreateTiffin(event) {
-        event.preventDefault();
-        try {
-            const formData = new FormData(event.target);
-            await API.createTiffin(Object.fromEntries(formData));
-            Utils.showToast('Tiffin created successfully');
-            event.target.reset();
-            this.loadHomePage();
-        } catch (error) {
-            Utils.showToast('Failed to create tiffin', 'error');
-        }
-    }
+    <div id="tiffin-details-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Tiffin Details</h2>
+                <button class="close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="tiffin-details-content">
+                    <div class="tiffin-details-header">
+                        <div class="tiffin-status">
+                            <span id="tiffin-details-status">Scheduled</span>
+                        </div>
+                        <div class="tiffin-datetime">
+                            <div class="tiffin-date">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16">
+                                    <path fill="none" d="M0 0h24v24H0z"/>
+                                    <path d="M17 3h4a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h4V1h2v2h6V1h2v2zm-2 2H9v2H7V5H4v4h16V5h-3v2h-2V5zm5 6H4v8h16v-8z"/>
+                                </svg>
+                                <span id="tiffin-details-date">Date</span>
+                            </div>
+                            <div class="tiffin-time">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16">
+                                    <path fill="none" d="M0 0h24v24H0z"/>
+                                    <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10zm0-2a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm1-8h4v2h-6V7h2v5z"/>
+                                </svg>
+                                <span id="tiffin-details-time">Time</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="tiffin-details-section">
+                        <h3>Description</h3>
+                        <p id="tiffin-details-description"></p>
+                    </div>
+                    
+                    <div class="tiffin-details-section">
+                        <h3>Menu Items</h3>
+                        <ul id="tiffin-details-menu-items" class="menu-items-list"></ul>
+                    </div>
+                    
+                    <div class="tiffin-details-section">
+                        <h3>Delivery Information</h3>
+                        <div class="tiffin-info-grid">
+                            <div class="tiffin-info-item">
+                                <span class="info-label">Price:</span>
+                                <span id="tiffin-details-price" class="info-value">₹0</span>
+                            </div>
+                            <div class="tiffin-info-item">
+                                <span class="info-label">Delivery Time:</span>
+                                <span id="tiffin-details-delivery-time" class="info-value">00:00</span>
+                            </div>
+                            <div class="tiffin-info-item">
+                                <span class="info-label">Cancellation Time:</span>
+                                <span id="tiffin-details-cancellation-time" class="info-value">00:00</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="tiffin-details-section">
+                        <h3>Assigned Users</h3>
+                        <div id="tiffin-details-users" class="assigned-users-list"></div>
+                    </div>
+                    
+                    <div class="tiffin-details-actions admin-only">
+                        <button id="update-tiffin-status-btn" class="action-button">Update Status</button>
+                        <div id="status-dropdown" class="status-dropdown">
+                            <button class="status-option" data-status="scheduled">Scheduled</button>
+                            <button class="status-option" data-status="preparing">Preparing</button>
+                            <button class="status-option" data-status="prepared">Prepared</button>
+                            <button class="status-option" data-status="out_for_delivery">Out for Delivery</button>
+                            <button class="status-option" data-status="delivered">Delivered</button>
+                            <button class="status-option" data-status="cancelled">Cancelled</button>
+                        </div>
+                    </div>
+                    
+                    <div class="tiffin-details-actions user-only">
+                        <button id="cancel-tiffin-btn" class="warning-button">Cancel Tiffin</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
-    static async handleCreateUser(event) {
-        event.preventDefault();
-        try {
-            const formData = new FormData(event.target);
-            await API.createUser(Object.fromEntries(formData));
-            Utils.showToast('User created successfully');
-            event.target.reset();
-            this.loadAdminDashboard();
-        } catch (error) {
-            Utils.showToast('Failed to create user', 'error');
-        }
-    }
+    <div id="add-user-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Add New User</h2>
+                <button class="close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="new-user-id">User ID</label>
+                    <input type="text" id="new-user-id" required>
+                </div>
+                <div class="form-group">
+                    <label for="new-user-name">Name</label>
+                    <input type="text" id="new-user-name" required>
+                </div>
+                <div class="form-group">
+                    <label for="new-user-email">Email</label>
+                    <input type="email" id="new-user-email" required>
+                </div>
+                <div class="form-group">
+                    <label for="new-user-address">Address</label>
+                    <textarea id="new-user-address" required></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="new-user-password">Password</label>
+                    <input type="password" id="new-user-password" required>
+                </div>
+                <button id="submit-new-user" class="action-button">Add User</button>
+            </div>
+        </div>
+    </div>
 
-    static async handleCreateNotice(event) {
-        event.preventDefault();
-        try {
-            const formData = new FormData(event.target);
-            await API.createNotice(Object.fromEntries(formData));
-            Utils.showToast('Notice created successfully');
-            event.target.reset();
-            this.loadNotices();
-        } catch (error) {
-            Utils.showToast('Failed to create notice', 'error');
-        }
-    }
+    <div id="confirm-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="confirm-title">Confirmation</h2>
+                <button class="close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="confirm-message">Are you sure you want to proceed?</p>
+                <div class="confirm-actions">
+                    <button id="confirm-yes" class="action-button">Yes</button>
+                    <button id="confirm-no" class="secondary-button">No</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
 
-    static async handleCreatePoll(event) {
-        event.preventDefault();
-        try {
-            const formData = new FormData(event.target);
-            const options = Array.from(formData.getAll('options[]'));
-            const pollData = {
-                question: formData.get('question'),
-                options,
-                start_date: formData.get('start_date'),
-                end_date: formData.get('end_date')
-            };
-            await API.createPoll(pollData);
-            Utils.showToast('Poll created successfully');
-            event.target.reset();
-            this.loadHomePage();
-        } catch (error) {
-            Utils.showToast('Failed to create poll', 'error');
-        }
-    }
+    <div id="notification-toast" class="notification-toast">
+        <div class="notification-content">
+            <span id="notification-toast-message"></span>
+        </div>
+    </div>
 
-    static async handleSpecialRequest(event) {
-        event.preventDefault();
-        try {
-            const formData = new FormData(event.target);
-            await API.createRequest(Object.fromEntries(formData));
-            Utils.showToast('Special request submitted successfully');
-            event.target.reset();
-        } catch (error) {
-            Utils.showToast('Failed to submit request', 'error');
-        }
-    }
-
-    static addPollOption() {
-        const optionsContainer = this.elements.pollOptionsContainer;
-        const newOption = document.createElement('input');
-        newOption.type = 'text';
-        newOption.name = 'options[]';
-        newOption.className = 'form-control mb-1';
-        newOption.placeholder = `Option ${optionsContainer.children.length + 1}`;
-        newOption.required = true;
-        optionsContainer.appendChild(newOption);
-    }
-
-    static setupAutoRefresh() {
-        setInterval(() => {
-            if (Auth.isAuthenticated()) {
-                this.loadHomePage();
-            }
-        }, config.REFRESH_INTERVAL);
-    }
-}
-
-// Initialize the application
-document.addEventListener('DOMContentLoaded', () => UI.init());
-</script>
+    <script src="iapp.js"></script>
 </body>
 </html>
+                                
