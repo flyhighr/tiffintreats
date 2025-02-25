@@ -841,7 +841,36 @@ async def get_user_history(
             status_code=500,
             detail=f"Failed to fetch history: {str(e)}"
         )
-
+@app.get("/admin/tiffins/{tiffin_id}")
+async def get_tiffin_by_id(
+    tiffin_id: str,
+    _: bool = Depends(verify_admin)
+):
+    try:
+        if not is_valid_object_id(tiffin_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid tiffin ID format"
+            )
+            
+        tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
+        
+        if not tiffin:
+            raise HTTPException(
+                status_code=404,
+                detail="Tiffin not found"
+            )
+        
+        tiffin["_id"] = str(tiffin["_id"])
+        return tiffin
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch tiffin: {str(e)}"
+        )
+           
 @app.post("/user/request-tiffin")
 async def request_special_tiffin(
     request: TiffinRequest,
