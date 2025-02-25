@@ -928,7 +928,7 @@ async def create_notice(notice: Notice, _: bool = Depends(verify_admin)):
 @app.get("/user/notices")
 async def get_user_notices(user_id: str = Depends(verify_user)):
     try:
-                current_time = datetime.now(IST)
+        current_time = datetime.now(IST)
         query = {
             "$or": [
                 {"expires_at": None},
