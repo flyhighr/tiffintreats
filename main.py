@@ -166,6 +166,22 @@ async def is_cancellation_allowed(tiffin: dict) -> bool:
     cancellation_time = parse_time(tiffin["cancellation_time"])
     return current_time < cancellation_time
 
+
+async def verify_api_key(api_key: str = Depends(api_key_header)):
+    """Verify API key for both admin and regular users"""
+    # Check if it's the admin API key
+    if api_key == ADMIN_API_KEY:
+        return {"user_id": ADMIN_ID, "is_admin": True}
+    
+    # Otherwise check regular users
+    user = db.users.find_one({"api_key": api_key})
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API key"
+        )
+    return {"user_id": user["user_id"], "is_admin": False}
+
 # Health Check
 @app.get("/health")
 async def health_check():
@@ -701,7 +717,7 @@ async def create_notice(notice: Notice, _: bool = Depends(verify_admin)):
         )
 
 @app.get("/user/notices")
-async def get_user_notices(_: str = Depends(verify_user)):
+async def get_user_notices(auth: dict = Depends(verify_api_key)):
     try:
         current_time = datetime.now(IST)
         query = {
@@ -720,7 +736,7 @@ async def get_user_notices(_: str = Depends(verify_user)):
             status_code=500,
             detail=f"Failed to fetch notices: {str(e)}"
         )
-
+           
 @app.delete("/admin/notices/{notice_id}")
 async def delete_notice(notice_id: str, _: bool = Depends(verify_admin)):
     try:
@@ -755,7 +771,7 @@ async def create_poll(poll: Poll, _: bool = Depends(verify_admin)):
         )
 
 @app.get("/user/polls")
-async def get_active_polls(_: str = Depends(verify_user)):
+async def get_active_polls(auth: dict = Depends(verify_api_key)):
     try:
         current_time = datetime.now(IST)
         query = {
