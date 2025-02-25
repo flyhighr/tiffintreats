@@ -1399,7 +1399,7 @@ async def generate_invoices(
     try:
         # Validate date formats
         try:
-                        datetime.strptime(start_date, "%Y-%m-%d")
+            datetime.strptime(start_date, "%Y-%m-%d")
             datetime.strptime(end_date, "%Y-%m-%d")
         except ValueError:
             raise HTTPException(
