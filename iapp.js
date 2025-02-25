@@ -2544,7 +2544,6 @@ function showConfirmDialog(title, message, onConfirm) {
     newCloseBtn.addEventListener('click', closeModal);
 }
 
-// Replace the current setupTabs function with this improved version
 function setupTabs(tabsContainerId, tabBtnClass, tabPaneClass) {
     const tabsContainer = document.getElementById(tabsContainerId);
     if (!tabsContainer) return;
@@ -2552,36 +2551,21 @@ function setupTabs(tabsContainerId, tabBtnClass, tabPaneClass) {
     const tabBtns = tabsContainer.querySelectorAll(`.${tabBtnClass}`);
     
     tabBtns.forEach(btn => {
-        // Remove existing event listener to prevent duplicates
-        const newBtn = btn.cloneNode(true);
-        btn.parentNode.replaceChild(newBtn, btn);
-        
-        newBtn.addEventListener('click', () => {
-            // Remove active class from all tabs in THIS container only
-            tabsContainer.querySelectorAll(`.${tabBtnClass}`).forEach(b => {
-                b.classList.remove('active');
+        btn.addEventListener('click', () => {
+            // Remove active class from all tabs
+            tabsContainer.querySelectorAll(`.${tabBtnClass}`).forEach(tab => {
+                tab.classList.remove('active');
             });
             
             // Add active class to clicked tab
-            newBtn.classList.add('active');
+            btn.classList.add('active');
             
             // Get the tab ID
-            const tabId = newBtn.dataset.tab;
-            
-            // Find all tab panes related to THIS container
-            const relatedPanes = document.querySelectorAll(`.${tabPaneClass}`);
+            const tabId = btn.getAttribute('data-tab');
             
             // Hide all tab panes
-            relatedPanes.forEach(pane => {
-
-                const belongsToThisContainer = Array.from(tabBtns).some(tabBtn => {
-                    const btnTabId = tabBtn.dataset.tab;
-                    return pane.id.startsWith(btnTabId);
-                });
-                
-                if (belongsToThisContainer) {
-                    pane.classList.remove('active');
-                }
+            document.querySelectorAll(`.${tabPaneClass}`).forEach(pane => {
+                pane.classList.remove('active');
             });
             
             // Show selected tab pane
@@ -2639,31 +2623,11 @@ function setupEventListeners() {
         document.getElementById('register-form').classList.remove('hidden');
         document.getElementById('login-form').classList.add('hidden');
     });
-    // Setup tab navigation for tiffin management
-    document.querySelectorAll('#tiffin-management-tabs .tab-btn').forEach(btn => {
+    const noticesTabBtns = document.querySelectorAll('#notices-polls-tabs .tab-btn');
+    noticesTabBtns.forEach(btn => {
         btn.addEventListener('click', function() {
-            // Remove active class from all tabs
-            document.querySelectorAll('#tiffin-management-tabs .tab-btn').forEach(tab => {
-                tab.classList.remove('active');
-            });
+            console.log('Notices tab clicked:', this.getAttribute('data-tab'));
             
-            // Add active class to clicked tab
-            this.classList.add('active');
-            
-            // Hide all tab panes
-            document.querySelectorAll('#manage-tiffins-page .tab-pane').forEach(pane => {
-                pane.classList.remove('active');
-            });
-            
-            // Show selected tab pane
-            const tabId = this.getAttribute('data-tab');
-            document.getElementById(`${tabId}-tab`).classList.add('active');
-        });
-    });
-    
-    // Setup tab navigation for notices & polls
-    document.querySelectorAll('#notices-polls-tabs .tab-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
             // Remove active class from all tabs
             document.querySelectorAll('#notices-polls-tabs .tab-btn').forEach(tab => {
                 tab.classList.remove('active');
@@ -2679,10 +2643,44 @@ function setupEventListeners() {
             
             // Show selected tab pane
             const tabId = this.getAttribute('data-tab');
-            document.getElementById(`${tabId}-tab`).classList.add('active');
+            const targetPane = document.getElementById(`${tabId}-tab`);
+            if (targetPane) {
+                targetPane.classList.add('active');
+                console.log('Activating pane:', tabId);
+            } else {
+                console.error('Could not find tab pane:', tabId);
+            }
         });
     });
-    
+    const tiffinTabBtns = document.querySelectorAll('.tiffin-management-tabs .tab-btn');
+    tiffinTabBtns.forEach(btn => {
+        btn.addEventListener('click', function() {
+            console.log('Tiffin tab clicked:', this.getAttribute('data-tab'));
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.tiffin-management-tabs .tab-btn').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Add active class to clicked tab
+            this.classList.add('active');
+            
+            // Hide all tab panes
+            document.querySelectorAll('#manage-tiffins-page .tab-pane').forEach(pane => {
+                pane.classList.remove('active');
+            });
+            
+            // Show selected tab pane
+            const tabId = this.getAttribute('data-tab');
+            const targetPane = document.getElementById(`${tabId}-tab`);
+            if (targetPane) {
+                targetPane.classList.add('active');
+                console.log('Activating pane:', tabId);
+            } else {
+                console.error('Could not find tab pane:', tabId);
+            }
+        });
+    });
     // Login form
     document.getElementById('login-btn').addEventListener('click', async () => {
         const userId = document.getElementById('login-userid').value.trim();
