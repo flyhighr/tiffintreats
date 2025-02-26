@@ -1572,22 +1572,18 @@ async def get_user_history(
 
 @app.post("/user/request-tiffin")
 async def request_special_tiffin(
-    request: TiffinRequest,
+    request_data: dict,  # Change this to accept a plain dictionary instead of TiffinRequest
     user_id: str = Depends(verify_user)
 ):
     try:
-        # If admin is making request, use the provided user_id
-        # Otherwise, override with authenticated user's ID
-        if user_id != ADMIN_ID:
-            request.user_id = user_id
-        
-        # Validate user exists
-        target_user = db.users.find_one({"user_id": request.user_id})
-        if not target_user:
-            raise HTTPException(
-                status_code=404,
-                detail="User not found"
-            )
+        # Create a TiffinRequest object with the authenticated user's ID
+        request = TiffinRequest(
+            user_id=user_id,
+            description=request_data.get("description", ""),
+            preferred_date=request_data.get("preferred_date", ""),
+            preferred_time=request_data.get("preferred_time", ""),
+            special_instructions=request_data.get("special_instructions", None)
+        )
         
         # Validate date format
         try:
