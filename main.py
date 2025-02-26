@@ -1365,6 +1365,8 @@ async def get_user_tiffin_by_id(
             detail=f"Failed to fetch tiffin: {str(e)}"
         )
         
+# Modify these endpoints in your FastAPI code
+
 @app.get("/user/tiffins/today")
 async def get_user_today_tiffins(user_id: str = Depends(verify_user)):
     try:
