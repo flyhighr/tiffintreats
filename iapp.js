@@ -92,95 +92,7 @@ function checkAuthentication() {
     }
 }
 
-async function login(userId, password) {
-    try {
-        console.log(`Attempting login for user: ${userId}`);
-        
-        const response = await fetch(`${API_BASE_URL}/auth/login?user_id=${userId}&password=${password}`);
-        
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Login failed');
-        }
-        
-        const data = await response.json();
-        
-        if (data.status === 'success') {
-            apiKey = data.api_key;
-            userRole = data.role;
-            
-            // Save auth data
-            localStorage.setItem('tiffinTreatsAuth', JSON.stringify({
-                apiKey: apiKey,
-                role: userRole
-            }));
-            
-            // For admin, we don't need to fetch profile
-            if (userRole === 'admin') {
-                currentUser = {
-                    name: "Administrator",
-                    user_id: "admin",
-                    email: "admin@tiffintreats.com",
-                    address: "TiffinTreats HQ"
-                };
-                updateUserInfo();
-            } else {
-                // Fetch user profile
-                await fetchUserProfile();
-            }
-            
-            showApp();
-            loadDashboard();
-            
-            return true;
-        } else {
-            throw new Error('Login failed');
-        }
-    } catch (error) {
-        console.error('Login error:', error);
-        showNotification(error.message, 'error');
-        return false;
-    }
-}
 
-async function fetchUserProfile() {
-    try {
-        console.log("Fetching user profile, role:", userRole);
-        
-        // For admin users, create a basic profile if needed
-        if (userRole === 'admin') {
-            console.log("Admin user, creating default profile");
-            currentUser = {
-                name: "Administrator",
-                user_id: "admin",
-                email: "admin@tiffintreats.com",
-                address: "TiffinTreats HQ"
-            };
-            
-            // Update UI with admin info
-            updateUserInfo();
-            return currentUser;
-        }
-        
-        // For regular users, fetch from API
-        console.log("Fetching profile with API key:", apiKey ? apiKey.substring(0, 5) + "..." : "Missing");
-        
-        const userProfile = await apiRequest('/user/profile');
-        
-        console.log("Profile data received:", userProfile);
-        
-        currentUser = userProfile;
-        
-        // Update UI with user info
-        updateUserInfo();
-        
-        return userProfile;
-    } catch (error) {
-        console.error('Error fetching user profile:', error);
-        showNotification('Failed to load profile: ' + error.message, 'error');
-        throw error;
-    }
-}
 
 function logout() {
     console.log("Logging out user");
@@ -209,24 +121,6 @@ function showApp() {
     }
 }
 
-function updateUserInfo() {
-    if (!currentUser) return;
-    
-    // Sidebar user info
-    document.getElementById('user-name').textContent = currentUser.name;
-    document.getElementById('user-role').textContent = userRole === 'admin' ? 'Administrator' : 'User';
-    document.getElementById('user-initial').textContent = getInitials(currentUser.name);
-    
-    // Profile page
-    document.getElementById('profile-name').textContent = currentUser.name;
-    document.getElementById('profile-user-id').textContent = currentUser.user_id;
-    document.getElementById('profile-initial').textContent = getInitials(currentUser.name);
-    
-    // Profile form fields
-    document.getElementById('profile-edit-name').value = currentUser.name;
-    document.getElementById('profile-edit-email').value = currentUser.email;
-    document.getElementById('profile-edit-address').value = currentUser.address;
-}
 
 // Navigation Functions
 function navigateTo(pageId) {
@@ -292,7 +186,6 @@ function navigateTo(pageId) {
 }
 
 // Dashboard Functions
-// Dashboard Functions
 async function loadDashboard() {
     console.log("Loading dashboard");
     
@@ -309,6 +202,7 @@ async function loadDashboard() {
     loadUpcomingTiffins();
 }
 
+// Notice & Poll Functions
 async function loadNotices() {
     try {
         console.log("Loading notices");
@@ -322,7 +216,7 @@ async function loadNotices() {
         if (notices.length === 0) {
             noticesContainer.innerHTML = `
                 <div class="empty-state">
-                    <img src="empty-notices.svg" alt="No notices">
+                    <img src="empty.svg" alt="No notices">
                     <p>No active notices at the moment</p>
                 </div>
             `;
@@ -360,7 +254,6 @@ async function loadNotices() {
         `;
     }
 }
-
 async function loadPolls() {
     try {
         console.log("Loading polls");
@@ -374,7 +267,7 @@ async function loadPolls() {
         if (polls.length === 0) {
             pollsContainer.innerHTML = `
                 <div class="empty-state">
-                    <img src="empty-polls.svg" alt="No polls">
+                    <img src="empty.svg" alt="No polls">
                     <p>No active polls at the moment</p>
                 </div>
             `;
@@ -401,6 +294,10 @@ async function loadPolls() {
                 `;
             });
             
+            const voteButtonClass = poll.has_voted ? 'secondary-button' : 'action-button';
+            const voteButtonText = poll.has_voted ? 'Voted' : 'Vote';
+            const voteButtonDisabled = poll.has_voted ? 'disabled' : '';
+            
             pollsHTML += `
                 <div class="poll-item" data-poll-id="${poll._id}">
                     <div class="poll-question">${poll.question}</div>
@@ -409,7 +306,7 @@ async function loadPolls() {
                     </div>
                     <div class="poll-meta">
                         <span>Ends on ${formatDate(poll.end_date)}</span>
-                        <button class="poll-vote-btn action-button" data-poll-id="${poll._id}">Vote</button>
+                        <button class="poll-vote-btn ${voteButtonClass}" data-poll-id="${poll._id}" ${voteButtonDisabled}>${voteButtonText}</button>
                     </div>
                 </div>
             `;
@@ -418,7 +315,7 @@ async function loadPolls() {
         pollsContainer.innerHTML = pollsHTML;
         
         // Add event listeners to vote buttons
-        document.querySelectorAll('.poll-vote-btn').forEach(btn => {
+        document.querySelectorAll('.poll-vote-btn:not([disabled])').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const pollId = e.target.dataset.pollId;
                 showVotePollModal(pollId);
@@ -438,22 +335,16 @@ async function loadTodayTiffin() {
     try {
         console.log("Loading today's tiffin");
         
-        const today = new Date().toISOString().split('T')[0];
-        const response = await fetch(`${API_BASE_URL}/user/tiffins?date=${today}`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        });
+        // Let's first try to get all user tiffins and filter for today
+        const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
         
-        console.log("Today's tiffin response status:", response.status);
+        // Use the general tiffins endpoint with date filter
+        const response = await apiRequest(`/user/tiffins?date=${today}`);
+        console.log('Today tiffin response:', response);
         
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Today's tiffin error details:", errorData);
-            throw new Error(errorData.detail || 'Failed to load today\'s tiffin');
-        }
+        // The API returns data in a paginated format
+        const tiffins = response.data || [];
         
-        const tiffins = await response.json();
         console.log(`Loaded ${tiffins.length} tiffins for today`);
         
         const todayTiffinStatus = document.getElementById('today-tiffin-status');
@@ -470,23 +361,33 @@ async function loadTodayTiffin() {
         const currentHour = now.getHours();
         
         let nextTiffin = tiffins.find(tiffin => {
+            if (!tiffin.delivery_time) return false;
             const deliveryHour = parseInt(tiffin.delivery_time.split(':')[0]);
             return deliveryHour > currentHour;
         });
         
         // If no next tiffin found, use the first one
-        if (!nextTiffin) {
+        if (!nextTiffin && tiffins.length > 0) {
             nextTiffin = tiffins[0];
         }
         
         // Update today's tiffin status
-        todayTiffinStatus.textContent = formatTiffinStatus(nextTiffin.status);
-        
-        // Update next delivery time
-        nextDeliveryTime.textContent = formatTime(nextTiffin.delivery_time);
+        if (nextTiffin) {
+            todayTiffinStatus.textContent = formatTiffinStatus(nextTiffin.status);
+            
+            // Update next delivery time
+            if (nextTiffin.delivery_time) {
+                nextDeliveryTime.textContent = formatTime(nextTiffin.delivery_time);
+            } else {
+                nextDeliveryTime.textContent = 'N/A';
+            }
+        } else {
+            todayTiffinStatus.textContent = 'No tiffin scheduled for today';
+            nextDeliveryTime.textContent = 'N/A';
+        }
     } catch (error) {
         console.error('Error loading today\'s tiffin:', error);
-        document.getElementById('today-tiffin-status').textContent = 'Error loading status';
+        document.getElementById('today-tiffin-status').textContent = 'Error loading tiffin';
         document.getElementById('next-delivery-time').textContent = 'N/A';
     }
 }
@@ -495,53 +396,44 @@ async function loadUpcomingTiffins() {
     try {
         console.log("Loading upcoming tiffins");
         
-        const today = new Date().toISOString().split('T')[0];
-        const response = await fetch(`${API_BASE_URL}/user/tiffins`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
+        // Get today's date
+        const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
+        
+        // Calculate date 7 days from now
+        const nextWeek = new Date();
+        nextWeek.setDate(nextWeek.getDate() + 7);
+        const nextWeekStr = nextWeek.toISOString().split('T')[0];
+        
+        // Use the general tiffins endpoint with date filter for future dates
+        // We'll use the date parameter to get tiffins after today
+        const response = await apiRequest(`/user/tiffins?date=${today}`);
+        console.log('Upcoming tiffins response:', response);
+        
+        // The API returns data in a paginated format
+        let tiffins = response.data || [];
+        
+        // Filter to only include future tiffins (today and later)
+        tiffins = tiffins.filter(tiffin => {
+            return tiffin.date >= today && tiffin.status !== 'cancelled';
         });
         
-        console.log("Upcoming tiffins response status:", response.status);
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Upcoming tiffins error details:", errorData);
-            throw new Error(errorData.detail || 'Failed to load upcoming tiffins');
-        }
-        
-        const tiffins = await response.json();
-        console.log(`Loaded ${tiffins.length} total tiffins`);
-        
-        const upcomingTiffins = document.getElementById('upcoming-tiffins');
-        
-        // Filter upcoming tiffins (today and future)
-        const upcoming = tiffins.filter(tiffin => {
-            const tiffinDate = new Date(tiffin.date);
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            return tiffinDate >= today && tiffin.status !== 'cancelled';
-        });
-        
-        console.log(`Filtered to ${upcoming.length} upcoming tiffins`);
-        
-        // Sort by date and time
-        upcoming.sort((a, b) => {
-            const dateA = new Date(a.date);
-            const dateB = new Date(b.date);
-            if (dateA.getTime() !== dateB.getTime()) {
-                return dateA - dateB;
+        // Sort by date (ascending)
+        tiffins.sort((a, b) => {
+            if (a.date !== b.date) {
+                return a.date.localeCompare(b.date);
             }
+            // If same date, sort by time
             return a.delivery_time.localeCompare(b.delivery_time);
         });
         
-        // Limit to next 6 tiffins
-        const nextTiffins = upcoming.slice(0, 6);
+        console.log(`Loaded ${tiffins.length} upcoming tiffins after filtering`);
         
-        if (nextTiffins.length === 0) {
+        const upcomingTiffins = document.getElementById('upcoming-tiffins');
+        
+        if (tiffins.length === 0) {
             upcomingTiffins.innerHTML = `
                 <div class="empty-state">
-                    <img src="empty-tiffins.svg" alt="No upcoming tiffins">
+                    <img src="${createPlaceholderSVG('No Tiffins')}" alt="No upcoming tiffins">
                     <p>No upcoming tiffins scheduled</p>
                 </div>
             `;
@@ -550,7 +442,16 @@ async function loadUpcomingTiffins() {
         
         let tiffinsHTML = '';
         
+        // Limit to next 6 tiffins
+        const nextTiffins = tiffins.slice(0, 6);
+        
         nextTiffins.forEach(tiffin => {
+            // Skip if tiffin doesn't have required properties
+            if (!tiffin._id || !tiffin.time || !tiffin.status || !tiffin.date) {
+                console.warn('Skipping invalid tiffin:', tiffin);
+                return;
+            }
+            
             const statusClass = `status-${tiffin.status}`;
             
             tiffinsHTML += `
@@ -561,15 +462,25 @@ async function loadUpcomingTiffins() {
                     </div>
                     <div class="tiffin-body">
                         <div class="tiffin-date">${formatDate(tiffin.date)}</div>
-                                                <div class="tiffin-description">${tiffin.description}</div>
+                        <div class="tiffin-description">${tiffin.description || 'No description available'}</div>
                         <div class="tiffin-meta">
-                            <span class="tiffin-delivery-time">Delivery at ${formatTime(tiffin.delivery_time)}</span>
-                            <span class="tiffin-price">₹${tiffin.price.toFixed(2)}</span>
+                            <span class="tiffin-delivery-time">Delivery at ${formatTime(tiffin.delivery_time || '00:00')}</span>
+                            <span class="tiffin-price">₹${(tiffin.price || 0).toFixed(2)}</span>
                         </div>
                     </div>
                 </div>
             `;
         });
+        
+        if (tiffinsHTML === '') {
+            upcomingTiffins.innerHTML = `
+                <div class="empty-state">
+                    <img src="${createPlaceholderSVG('No Tiffins')}" alt="No upcoming tiffins">
+                    <p>No valid upcoming tiffins found</p>
+                </div>
+            `;
+            return;
+        }
         
         upcomingTiffins.innerHTML = tiffinsHTML;
         
@@ -577,31 +488,41 @@ async function loadUpcomingTiffins() {
         document.querySelectorAll('.tiffin-card').forEach(card => {
             card.addEventListener('click', (e) => {
                 const tiffinId = e.currentTarget.dataset.tiffinId;
-                showTiffinDetails(tiffinId);
+                if (tiffinId) {
+                    showTiffinDetails(tiffinId);
+                }
             });
         });
         
-        // Update month tiffin count
-        const currentMonth = new Date().getMonth();
-        const currentYear = new Date().getFullYear();
-        
-        const monthTiffins = tiffins.filter(tiffin => {
-            const tiffinDate = new Date(tiffin.date);
-            return tiffinDate.getMonth() === currentMonth && 
-                   tiffinDate.getFullYear() === currentYear &&
-                   tiffin.status !== 'cancelled';
-        });
-        
-        document.getElementById('month-tiffin-count').textContent = `${monthTiffins.length} tiffins`;
+        // Update month tiffin count from dashboard stats
+        try {
+            const dashboardStats = await apiRequest('/user/dashboard/stats');
+            if (dashboardStats && dashboardStats.month_tiffins !== undefined) {
+                document.getElementById('month-tiffin-count').textContent = `${dashboardStats.month_tiffins} tiffins`;
+            } else {
+                document.getElementById('month-tiffin-count').textContent = `0 tiffins`;
+            }
+        } catch (statsError) {
+            console.error('Error loading dashboard stats:', statsError);
+            document.getElementById('month-tiffin-count').textContent = `0 tiffins`;
+        }
         
     } catch (error) {
         console.error('Error loading upcoming tiffins:', error);
         document.getElementById('upcoming-tiffins').innerHTML = `
             <div class="empty-state">
-                <p>Error loading tiffins: ${error.message}</p>
+                <img src="${createPlaceholderSVG('Error')}" alt="Error">
+                <p>Could not load upcoming tiffins: ${error.message}</p>
             </div>
         `;
+        document.getElementById('month-tiffin-count').textContent = `0 tiffins`;
     }
+}
+
+
+// Add this function to your JavaScript code
+function createPlaceholderSVG(text) {
+    return `data:image/svg+xml;charset=UTF-8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><rect width="100%" height="100%" fill="%23f5f5f5"/><text x="50%" y="50%" font-family="Arial" font-size="14" text-anchor="middle" dominant-baseline="middle" fill="%23aaa">${text}</text></svg>`;
 }
 
 // Tiffins Page Functions
@@ -609,21 +530,12 @@ async function loadTiffins() {
     try {
         console.log("Loading tiffins with API key:", apiKey ? "Present" : "Missing");
         
-        const response = await fetch(`${API_BASE_URL}/user/tiffins`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        });
+        const response = await apiRequest('/user/tiffins');
         
-        console.log("Tiffins response status:", response.status);
+        console.log("Tiffins response:", response);
         
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Tiffins error details:", errorData);
-            throw new Error(errorData.detail || 'Failed to load tiffins');
-        }
-        
-        const tiffins = await response.json();
+        // The API now returns data in a paginated format
+        const tiffins = response.data || [];
         console.log(`Loaded ${tiffins.length} tiffins`);
         
         displayTiffins(tiffins);
@@ -637,6 +549,7 @@ async function loadTiffins() {
         `;
     }
 }
+
 function displayTiffins(tiffins, filters = {}) {
     const tiffinsList = document.getElementById('tiffins-list');
     
@@ -668,7 +581,7 @@ function displayTiffins(tiffins, filters = {}) {
     if (filteredTiffins.length === 0) {
         tiffinsList.innerHTML = `
             <div class="empty-state">
-                <img src="empty-tiffins.svg" alt="No tiffins">
+                <img src="empty.svg" alt="No tiffins">
                 <p>No tiffins found</p>
             </div>
         `;
@@ -711,121 +624,237 @@ function displayTiffins(tiffins, filters = {}) {
 
 async function showTiffinDetails(tiffinId) {
     try {
-        console.log(`Loading details for tiffin: ${tiffinId}`);
+        if (!tiffinId || typeof tiffinId !== 'string') {
+            throw new Error('Invalid tiffin ID');
+        }
         
-        // Fetch tiffin details
+        console.log(`Loading details for tiffin ID: ${tiffinId}`);
         const tiffin = await fetchTiffinDetails(tiffinId);
         
-        // Populate modal
-        document.getElementById('tiffin-details-status').textContent = formatTiffinStatus(tiffin.status);
-        document.getElementById('tiffin-details-status').className = `status-badge status-${tiffin.status}`;
-        
+        // Update modal with tiffin details
         document.getElementById('tiffin-details-date').textContent = formatDate(tiffin.date);
         document.getElementById('tiffin-details-time').textContent = formatTiffinTime(tiffin.time);
-        document.getElementById('tiffin-details-description').textContent = tiffin.description;
+        document.getElementById('tiffin-details-description').textContent = tiffin.description || 'No description available';
+        document.getElementById('tiffin-details-price').textContent = `₹${(tiffin.price || 0).toFixed(2)}`;
+        document.getElementById('tiffin-details-delivery-time').textContent = formatTime(tiffin.delivery_time || '00:00');
+        document.getElementById('tiffin-details-cancellation-time').textContent = formatTime(tiffin.cancellation_time || '00:00');
         
-        // Menu items
+        // Update status with appropriate class
+        const statusElement = document.getElementById('tiffin-details-status');
+        statusElement.textContent = formatTiffinStatus(tiffin.status);
+        statusElement.className = `status-${tiffin.status}`;
+        
+        // Update menu items
         const menuItemsList = document.getElementById('tiffin-details-menu-items');
         menuItemsList.innerHTML = '';
         
-        tiffin.menu_items.forEach(item => {
+        if (tiffin.menu_items && tiffin.menu_items.length > 0) {
+            tiffin.menu_items.forEach(item => {
+                const li = document.createElement('li');
+                li.textContent = item;
+                menuItemsList.appendChild(li);
+            });
+        } else {
             const li = document.createElement('li');
-            li.textContent = item;
+            li.textContent = 'No menu items specified';
             menuItemsList.appendChild(li);
-        });
+        }
         
-        // Delivery info
-        document.getElementById('tiffin-details-price').textContent = `₹${tiffin.price.toFixed(2)}`;
-        document.getElementById('tiffin-details-delivery-time').textContent = formatTime(tiffin.delivery_time);
-        document.getElementById('tiffin-details-cancellation-time').textContent = formatTime(tiffin.cancellation_time);
+        // Update assigned users (for admin only)
+        const usersContainer = document.getElementById('tiffin-details-users');
+        usersContainer.innerHTML = '';
         
-        // Show/hide appropriate action buttons
+        if (userRole === 'admin' && tiffin.assigned_users && tiffin.assigned_users.length > 0) {
+            tiffin.assigned_users.forEach(userId => {
+                const userDiv = document.createElement('div');
+                userDiv.className = 'assigned-user';
+                userDiv.textContent = userId;
+                usersContainer.appendChild(userDiv);
+            });
+        } else if (userRole === 'admin') {
+            usersContainer.innerHTML = '<div class="empty-message">No users assigned</div>';
+        } else {
+            // Hide the assigned users section for regular users
+            const userSection = document.querySelector('.tiffin-details-section:nth-child(4)');
+            if (userSection) {
+                userSection.style.display = 'none';
+            }
+        }
+        
+        // Show/hide appropriate action buttons based on role and tiffin status
         const adminActions = document.querySelector('.tiffin-details-actions.admin-only');
         const userActions = document.querySelector('.tiffin-details-actions.user-only');
         
         if (userRole === 'admin') {
-            adminActions.classList.remove('hidden');
-            userActions.classList.add('hidden');
+            if (adminActions) adminActions.style.display = 'block';
+            if (userActions) userActions.style.display = 'none';
         } else {
-            adminActions.classList.add('hidden');
-            userActions.classList.remove('hidden');
+            if (adminActions) adminActions.style.display = 'none';
+            if (userActions) userActions.style.display = 'block';
             
-            // Check if cancellation is allowed
+            // Hide cancel button if tiffin is already delivered or cancelled
+            // or if past cancellation time
             const cancelBtn = document.getElementById('cancel-tiffin-btn');
-            const isCancellable = await checkTiffinCancellable(tiffin);
-            
-            if (isCancellable && tiffin.status !== 'cancelled') {
-                cancelBtn.disabled = false;
-                cancelBtn.classList.remove('hidden');
-            } else {
-                cancelBtn.disabled = true;
-                cancelBtn.classList.add('hidden');
+            if (cancelBtn) {
+                if (tiffin.status === 'delivered' || tiffin.status === 'cancelled') {
+                    cancelBtn.style.display = 'none';
+                } else {
+                    // Check if past cancellation time
+                    const today = new Date().toISOString().split('T')[0];
+                    const isTodayOrFuture = tiffin.date >= today;
+                    
+                    if (isTodayOrFuture) {
+                        const now = new Date();
+                        const cancellationTime = new Date(`${tiffin.date}T${tiffin.cancellation_time || '00:00'}`);
+                        
+                        if (now > cancellationTime) {
+                            cancelBtn.style.display = 'none';
+                        } else {
+                            cancelBtn.style.display = 'block';
+                            
+                            // Add event listener to cancel button
+                            cancelBtn.onclick = () => cancelTiffin(tiffin._id);
+                        }
+                    } else {
+                        cancelBtn.style.display = 'none';
+                    }
+                }
             }
         }
         
-        // Show modal
+        // Store the current tiffin ID for later use
         const modal = document.getElementById('tiffin-details-modal');
-        modal.classList.add('active');
-        
-        // Setup event listeners
-        setupTiffinDetailsListeners(tiffinId);
+        if (modal) {
+            modal.dataset.tiffinId = tiffin._id;
+            modal.classList.add('active');
+        }
         
     } catch (error) {
         console.error('Error showing tiffin details:', error);
-        showNotification('Failed to load tiffin details: ' + error.message, 'error');
+        showNotification('Could not load tiffin details: ' + (error.message || 'Unknown error'), 'error');
+    }
+}
+
+// Helper function to format time
+function formatTime(timeStr) {
+    if (!timeStr) return 'N/A';
+    
+    try {
+        const [hours, minutes] = timeStr.split(':');
+        const hour = parseInt(hours);
+        const ampm = hour >= 12 ? 'PM' : 'AM';
+        const formattedHour = hour % 12 || 12;
+        return `${formattedHour}:${minutes} ${ampm}`;
+    } catch (error) {
+        console.error('Error formatting time:', error);
+        return timeStr || 'N/A';
+    }
+}
+
+// Helper function to format tiffin time
+function formatTiffinTime(timeStr) {
+    if (!timeStr) return 'N/A';
+    
+    const timeMap = {
+        'morning': 'Morning',
+        'afternoon': 'Afternoon',
+        'evening': 'Evening'
+    };
+    
+    return timeMap[timeStr] || timeStr;
+}
+
+// Helper function to format tiffin status
+function formatTiffinStatus(status) {
+    if (!status) return 'Unknown';
+    
+    const statusMap = {
+        'scheduled': 'Scheduled',
+        'preparing': 'Preparing',
+        'prepared': 'Prepared',
+        'out_for_delivery': 'Out for Delivery',
+        'delivered': 'Delivered',
+        'cancelled': 'Cancelled'
+    };
+    
+    return statusMap[status] || status;
+}
+
+// Helper function to format date
+function formatDate(dateStr) {
+    if (!dateStr) return 'N/A';
+    
+    try {
+        const date = new Date(dateStr);
+        if (isNaN(date.getTime())) {
+            return dateStr;
+        }
+        
+        const options = { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' };
+        return date.toLocaleDateString(undefined, options);
+    } catch (error) {
+        console.error('Error formatting date:', error);
+        return dateStr || 'N/A';
     }
 }
 
 async function fetchTiffinDetails(tiffinId) {
-    console.log(`Fetching details for tiffin ID: ${tiffinId}, user role: ${userRole}`);
-    
-    // For user role, we'll use the user/tiffins endpoint
-    // For admin role, we'll use the admin/tiffins/{tiffin_id} endpoint
-    
-    let tiffin;
-    
-    if (userRole === 'admin') {
-        const response = await fetch(`${API_BASE_URL}/admin/tiffins/${tiffinId}`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        });
+    try {
+        console.log(`Fetching details for tiffin ID: ${tiffinId}, user role: ${userRole}`);
         
-        console.log("Tiffin details response status:", response.status);
+        // For user role, we'll use the user/tiffins endpoint
+        // For admin role, we'll use the admin/tiffins/{tiffin_id} endpoint
         
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Tiffin details error:", errorData);
-            throw new Error(errorData.detail || 'Failed to fetch tiffin details');
+        let tiffin;
+        
+        if (userRole === 'admin') {
+            tiffin = await apiRequest(`/admin/tiffins/${tiffinId}`);
+        } else {
+            // For users, we now have an endpoint to get a specific tiffin
+            tiffin = await apiRequest(`/user/tiffins/${tiffinId}`);
         }
         
-        tiffin = await response.json();
-    } else {
-        // For users, we need to get all tiffins and find the right one
-        const response = await fetch(`${API_BASE_URL}/user/tiffins`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        });
-        
-        console.log("User tiffins response status:", response.status);
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("User tiffins error:", errorData);
-            throw new Error(errorData.detail || 'Failed to fetch tiffin details');
-        }
-        
-        const tiffins = await response.json();
-        tiffin = tiffins.find(t => t._id === tiffinId);
-        
-        if (!tiffin) {
-            throw new Error('Tiffin not found');
-        }
+        console.log("Tiffin details loaded:", tiffin);
+        return tiffin;
+    } catch (error) {
+        console.error(`Error fetching tiffin details for ID ${tiffinId}:`, error);
+        throw new Error(`Failed to load tiffin details: ${error.message}`);
     }
-    
-    console.log("Tiffin details loaded:", tiffin);
-    return tiffin;
+}
+
+async function cancelTiffin(tiffinId) {
+    try {
+        if (!tiffinId) {
+            showNotification('Invalid tiffin ID', 'error');
+            return;
+        }
+
+        showConfirmDialog(
+            'Cancel Tiffin',
+            'Are you sure you want to cancel this tiffin? This action cannot be undone.',
+            async () => {
+                try {
+                    // The API expects tiffin_id as a query parameter
+                    await apiRequest(`/user/cancel-tiffin?tiffin_id=${tiffinId}`, {
+                        method: 'POST'
+                    });
+                    
+                    showNotification('Tiffin cancelled successfully', 'success');
+                    document.getElementById('tiffin-details-modal').classList.remove('active');
+                    
+                    // Reload tiffins
+                    loadTiffins();
+                    loadDashboard();
+                } catch (error) {
+                    console.error('Error cancelling tiffin:', error);
+                    showNotification('Failed to cancel tiffin: ' + error.message, 'error');
+                }
+            }
+        );
+    } catch (error) {
+        console.error('Error cancelling tiffin:', error);
+        showNotification('Error: ' + error.message, 'error');
+    }
 }
 
 
@@ -957,21 +986,12 @@ async function loadHistory() {
     try {
         console.log("Loading history with API key:", apiKey ? "Present" : "Missing");
         
-        const response = await fetch(`${API_BASE_URL}/user/history`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        });
+        const response = await apiRequest('/user/history');
         
-        console.log("History response status:", response.status);
+        console.log("History response:", response);
         
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("History error details:", errorData);
-            throw new Error(errorData.detail || 'Failed to load history');
-        }
-        
-        const history = await response.json();
+        // The API now returns data in a paginated format
+        const history = response.data || [];
         console.log(`Loaded ${history.length} history items`);
         
         displayHistory(history);
@@ -1011,7 +1031,7 @@ function displayHistory(history, filters = {}) {
     if (filteredHistory.length === 0) {
         historyList.innerHTML = `
             <div class="empty-state">
-                <img src="empty-history.svg" alt="No history">
+                <img src="empty.svg" alt="No history">
                 <p>No tiffin history found</p>
             </div>
         `;
@@ -1085,29 +1105,81 @@ function updateHistoryStats(history) {
 }
 
 // Invoices Page Functions
-// Invoices Page Functions
 async function loadInvoices() {
     try {
         console.log("Loading invoices with API key:", apiKey ? "Present" : "Missing");
         
-        const response = await fetch(`${API_BASE_URL}/user/invoices`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        });
-        
-        console.log("Invoices response status:", response.status);
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Invoices error details:", errorData);
-            throw new Error(errorData.detail || 'Failed to load invoices');
-        }
-        
-        const invoices = await response.json();
+        const invoices = await apiRequest('/user/invoices');
         console.log(`Loaded ${invoices.length} invoices`);
         
-        displayInvoices(invoices);
+        const invoicesList = document.getElementById('invoices-list');
+        
+        if (!invoices || invoices.length === 0) {
+            invoicesList.innerHTML = `
+                <div class="empty-state">
+                    <img src="empty.svg" alt="No invoices">
+                    <p>No invoices found</p>
+                </div>
+            `;
+            return;
+        }
+        
+        // Sort by date (newest first)
+        invoices.sort((a, b) => {
+            const dateA = new Date(a.generated_at || a.created_at || 0);
+            const dateB = new Date(b.generated_at || b.created_at || 0);
+            return dateB - dateA;
+        });
+        
+        let invoicesHTML = '';
+        
+        invoices.forEach(invoice => {
+            const statusClass = invoice.paid ? 'paid' : 'unpaid';
+            const statusText = invoice.paid ? 'Paid' : 'Unpaid';
+            
+            invoicesHTML += `
+                <div class="invoice-card" data-invoice-id="${invoice._id}">
+                    <div class="invoice-card-header">
+                        <span>Invoice #${invoice._id.substring(0, 8)}</span>
+                        <span class="invoice-status ${statusClass}">${statusText}</span>
+                    </div>
+                    <div class="invoice-card-body">
+                        <div class="invoice-card-dates">
+                            <div class="invoice-card-date">
+                                From
+                                <span>${formatDate(invoice.start_date)}</span>
+                            </div>
+                            <div class="invoice-card-date">
+                                To
+                                <span>${formatDate(invoice.end_date)}</span>
+                            </div>
+                        </div>
+                        <div class="invoice-card-tiffins">
+                            <div class="invoice-card-tiffins-title">Total Tiffins</div>
+                            <div class="invoice-card-tiffin-count">${invoice.tiffin_count || invoice.tiffins?.length || 0}</div>
+                        </div>
+                        <div class="invoice-card-total">
+                            <span>Total Amount</span>
+                            <span class="invoice-card-amount">₹${invoice.total_amount.toFixed(2)}</span>
+                        </div>
+                        <button class="secondary-button view-invoice-btn" data-invoice-id="${invoice._id}">
+                            View Details
+                        </button>
+                    </div>
+                </div>
+            `;
+        });
+        
+        invoicesList.innerHTML = invoicesHTML;
+        
+        // Add event listeners to view invoice buttons
+        document.querySelectorAll('.view-invoice-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const invoiceId = e.target.dataset.invoiceId;
+                viewInvoiceDetails(invoiceId);
+            });
+        });
         
     } catch (error) {
         console.error('Error loading invoices:', error);
@@ -1116,6 +1188,88 @@ async function loadInvoices() {
                 <p>Error loading invoices: ${error.message}</p>
             </div>
         `;
+    }
+}
+
+async function viewInvoiceDetails(invoiceId) {
+    try {
+        console.log(`Loading details for invoice ID: ${invoiceId}`);
+        
+        const invoice = await apiRequest(`/user/invoices/${invoiceId}`);
+        console.log("Invoice details loaded:", invoice);
+        
+        // Create a modal dynamically
+        const modal = document.createElement('div');
+        modal.className = 'modal active';
+        modal.id = 'invoice-details-modal';
+        
+        let tiffinsHTML = '';
+        if (invoice.tiffin_details && invoice.tiffin_details.length > 0) {
+            invoice.tiffin_details.forEach(tiffin => {
+                tiffinsHTML += `
+                    <div class="invoice-tiffin-item">
+                        <div class="invoice-tiffin-date">
+                            <strong>${formatDate(tiffin.date)}</strong> (${formatTiffinTime(tiffin.time)})
+                        </div>
+                        <div class="invoice-tiffin-desc">${tiffin.description || 'No description'}</div>
+                        <div class="invoice-tiffin-price">₹${tiffin.price.toFixed(2)}</div>
+                    </div>
+                `;
+            });
+        } else {
+            tiffinsHTML = '<div class="empty-message">No tiffin details available</div>';
+        }
+        
+        modal.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Invoice Details</h2>
+                    <button class="close-modal">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="invoice-details-header">
+                        <div class="invoice-details-id">
+                            <strong>Invoice #:</strong> ${invoice._id.substring(0, 8)}
+                        </div>
+                        <div class="invoice-details-status ${invoice.paid ? 'paid' : 'unpaid'}">
+                            ${invoice.paid ? 'Paid' : 'Unpaid'}
+                        </div>
+                    </div>
+                    
+                    <div class="invoice-details-dates">
+                        <div class="invoice-details-date">
+                            <strong>Period:</strong> ${formatDate(invoice.start_date)} to ${formatDate(invoice.end_date)}
+                        </div>
+                        <div class="invoice-details-date">
+                            <strong>Generated:</strong> ${formatDate(invoice.generated_at)}
+                        </div>
+                    </div>
+                    
+                    <div class="invoice-details-section">
+                        <h3>Tiffins (${invoice.tiffin_details?.length || 0})</h3>
+                        <div class="invoice-tiffins-list">
+                            ${tiffinsHTML}
+                        </div>
+                    </div>
+                    
+                    <div class="invoice-details-total">
+                        <strong>Total Amount:</strong> 
+                        <span class="invoice-total-amount">₹${invoice.total_amount.toFixed(2)}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // Close button event
+        modal.querySelector('.close-modal').addEventListener('click', () => {
+            document.body.removeChild(modal);
+        });
+        
+    } catch (error) {
+        console.error('Error showing invoice details:', error);
+        showNotification('Failed to load invoice details: ' + error.message, 'error');
     }
 }
 
@@ -1132,7 +1286,7 @@ function displayInvoices(invoices) {
     if (invoices.length === 0) {
         invoicesList.innerHTML = `
             <div class="empty-state">
-                <img src="empty-invoices.svg" alt="No invoices">
+                <img src="empty.svg" alt="No invoices">
                 <p>No invoices found</p>
             </div>
         `;
@@ -1176,6 +1330,278 @@ function displayInvoices(invoices) {
     });
     
     invoicesList.innerHTML = invoicesHTML;
+}
+
+
+async function login(userId, password) {
+    try {
+        console.log(`Attempting login for user: ${userId}`);
+        
+        const response = await fetch(`${API_BASE_URL}/auth/login?user_id=${userId}&password=${password}`);
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Login failed');
+        }
+        
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+            apiKey = data.api_key;
+            userRole = data.role;
+            
+            // Save auth data
+            localStorage.setItem('tiffinTreatsAuth', JSON.stringify({
+                apiKey: apiKey,
+                role: userRole
+            }));
+            
+            // For admin, we don't need to fetch profile
+            if (userRole === 'admin') {
+                currentUser = {
+                    name: "Administrator",
+                    user_id: "admin",
+                    email: "admin@tiffintreats.com",
+                    address: "TiffinTreats HQ"
+                };
+                updateUserInfo();
+            } else {
+                // Fetch user profile
+                await fetchUserProfile();
+            }
+            
+            // Load notifications
+            await loadNotifications();
+            
+            showApp();
+            loadDashboard();
+            
+            return true;
+        } else {
+            throw new Error('Login failed');
+        }
+    } catch (error) {
+        console.error('Login error:', error);
+        showNotification(error.message, 'error');
+        return false;
+    }
+}
+
+
+// Notification Functions
+async function loadNotifications() {
+    try {
+        const response = await apiRequest('/user/notifications');
+        
+        const notifications = response.notifications || [];
+        const unreadCount = response.unread_count || 0;
+        
+        // Update notification count badge
+        document.getElementById('notification-count').textContent = unreadCount;
+        
+        // Update notification list
+        const notificationList = document.getElementById('notification-list');
+        notificationList.innerHTML = '';
+        
+        if (notifications.length === 0) {
+            notificationList.innerHTML = '<div class="empty-notification">No notifications</div>';
+            return;
+        }
+        
+        notifications.forEach(notification => {
+            const notificationItem = document.createElement('div');
+            notificationItem.className = `notification-item ${notification.read ? '' : 'unread'}`;
+            notificationItem.dataset.id = notification._id;
+            
+            notificationItem.innerHTML = `
+                <div class="notification-icon ${notification.type}">
+                    <i class="icon-${notification.type}"></i>
+                </div>
+                <div class="notification-content">
+                    <div class="notification-title">${notification.title}</div>
+                    <div class="notification-message">${notification.message}</div>
+                    <div class="notification-time">${formatDate(notification.created_at)}</div>
+                </div>
+            `;
+            
+            // Add click handler to mark as read
+            notificationItem.addEventListener('click', () => {
+                markNotificationRead(notification._id);
+            });
+            
+            notificationList.appendChild(notificationItem);
+        });
+        
+        // Update active notifications array for global access
+        activeNotifications = notifications.filter(n => !n.read);
+        
+    } catch (error) {
+        console.error('Error loading notifications:', error);
+        document.getElementById('notification-list').innerHTML = 
+            '<div class="empty-notification">Error loading notifications</div>';
+    }
+}
+
+async function markNotificationRead(notificationId) {
+    try {
+        await apiRequest('/user/notifications/mark-read', {
+            method: 'POST',
+            body: JSON.stringify({
+                notification_ids: [notificationId]
+            })
+        });
+        
+        // Update UI
+        const notificationItem = document.querySelector(`.notification-item[data-id="${notificationId}"]`);
+        if (notificationItem) {
+            notificationItem.classList.remove('unread');
+        }
+        
+        // Update global notification count
+        const unreadCount = parseInt(document.getElementById('notification-count').textContent) - 1;
+        document.getElementById('notification-count').textContent = Math.max(0, unreadCount);
+        
+        // Update active notifications array
+        activeNotifications = activeNotifications.filter(n => n._id !== notificationId);
+        
+    } catch (error) {
+        console.error('Error marking notification as read:', error);
+    }
+}
+
+async function markAllNotificationsRead() {
+    try {
+        await apiRequest('/user/notifications/mark-all-read', {
+            method: 'POST'
+        });
+        
+        // Update UI
+        document.querySelectorAll('.notification-item.unread').forEach(item => {
+            item.classList.remove('unread');
+        });
+        
+        // Reset notification count
+        document.getElementById('notification-count').textContent = '0';
+        
+        // Clear active notifications array
+        activeNotifications = [];
+        
+        showNotification('All notifications marked as read', 'success');
+        
+    } catch (error) {
+        console.error('Error marking all notifications as read:', error);
+        showNotification('Failed to mark notifications as read', 'error');
+    }
+}
+
+
+
+async function fetchUserProfile() {
+    try {
+        console.log("Fetching user profile, role:", userRole);
+        
+        // For admin users, create a basic profile if needed
+        if (userRole === 'admin') {
+            console.log("Admin user, creating default profile");
+            currentUser = {
+                name: "Administrator",
+                user_id: "admin",
+                email: "admin@tiffintreats.com",
+                address: "TiffinTreats HQ"
+            };
+            
+            // Update UI with admin info
+            updateUserInfo();
+            return currentUser;
+        }
+        
+        console.log("Fetching profile with API key:", apiKey ? apiKey.substring(0, 5) + "..." : "Missing");
+        
+        const userProfile = await apiRequest('/user/profile');
+        
+        console.log("Profile data received:", userProfile);
+        
+        currentUser = userProfile;
+        
+        // Update UI with user info
+        updateUserInfo();
+        
+        return userProfile;
+    } catch (error) {
+        console.error('Error fetching user profile:', error);
+        showNotification('Failed to load profile: ' + error.message, 'error');
+        throw error;
+    }
+}
+
+async function updateUserProfile() {
+    try {
+        console.log("Updating user profile");
+        
+        const name = document.getElementById('profile-edit-name').value.trim();
+        const email = document.getElementById('profile-edit-email').value.trim();
+        const address = document.getElementById('profile-edit-address').value.trim();
+        
+        if (!name || !email || !address) {
+            showNotification('Please fill in all fields', 'error');
+            return;
+        }
+        
+        const response = await apiRequest('/user/profile', {
+            method: 'PUT',
+            body: JSON.stringify({
+                name,
+                email,
+                address
+            })
+        });
+        
+        // Refresh user profile
+        await fetchUserProfile();
+        
+        showNotification('Profile updated successfully', 'success');
+    } catch (error) {
+        console.error('Error updating profile:', error);
+        showNotification('Failed to update profile: ' + error.message, 'error');
+    }
+}
+
+async function changePassword() {
+    try {
+        console.log("Changing password");
+        
+        const currentPassword = document.getElementById('current-password').value;
+        const newPassword = document.getElementById('new-password').value;
+        const confirmPassword = document.getElementById('confirm-password').value;
+        
+        if (!currentPassword || !newPassword || !confirmPassword) {
+            showNotification('Please fill in all password fields', 'error');
+            return;
+        }
+        
+        if (newPassword !== confirmPassword) {
+            showNotification('New passwords do not match', 'error');
+            return;
+        }
+        
+        await apiRequest('/user/password', {
+            method: 'PUT',
+            body: JSON.stringify({
+                old_password: currentPassword,
+                new_password: newPassword
+            })
+        });
+        
+        // Clear password fields
+        document.getElementById('current-password').value = '';
+        document.getElementById('new-password').value = '';
+        document.getElementById('confirm-password').value = '';
+        
+        showNotification('Password changed successfully', 'success');
+    } catch (error) {
+        console.error('Error changing password:', error);
+        showNotification('Failed to change password: ' + error.message, 'error');
+    }
 }
 
 // Profile Page Functions
@@ -1253,125 +1679,16 @@ async function loadProfileStats() {
     }
 }
 
-async function updateUserProfile() {
-    try {
-        console.log("Updating user profile");
-        
-        const name = document.getElementById('profile-edit-name').value.trim();
-        const email = document.getElementById('profile-edit-email').value.trim();
-        const address = document.getElementById('profile-edit-address').value.trim();
-        
-        if (!name || !email || !address) {
-            showNotification('Please fill in all fields', 'error');
-            return;
-        }
-        
-        const response = await fetch(`${API_BASE_URL}/user/profile`, {
-            method: 'PUT',
-            headers: {
-                'X-API-Key': apiKey,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                name,
-                email,
-                address
-            })
-        });
-        
-        console.log("Profile update response status:", response.status);
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Profile update error details:", errorData);
-            throw new Error(errorData.detail || 'Failed to update profile');
-        }
-        
-        // Refresh user profile
-        await fetchUserProfile();
-        
-        showNotification('Profile updated successfully', 'success');
-    } catch (error) {
-        console.error('Error updating profile:', error);
-        showNotification('Failed to update profile: ' + error.message, 'error');
-    }
-}
-
-async function changePassword() {
-    try {
-        console.log("Changing password");
-        
-        const currentPassword = document.getElementById('current-password').value;
-        const newPassword = document.getElementById('new-password').value;
-        const confirmPassword = document.getElementById('confirm-password').value;
-        
-        if (!currentPassword || !newPassword || !confirmPassword) {
-            showNotification('Please fill in all password fields', 'error');
-            return;
-        }
-        
-        if (newPassword !== confirmPassword) {
-            showNotification('New passwords do not match', 'error');
-            return;
-        }
-        
-        const response = await fetch(`${API_BASE_URL}/user/password`, {
-            method: 'PUT',
-            headers: {
-                'X-API-Key': apiKey,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                old_password: currentPassword,
-                new_password: newPassword
-            })
-        });
-        
-        console.log("Password change response status:", response.status);
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Password change error details:", errorData);
-            throw new Error(errorData.detail || 'Failed to change password');
-        }
-        
-        // Clear password fields
-        document.getElementById('current-password').value = '';
-        document.getElementById('new-password').value = '';
-        document.getElementById('confirm-password').value = '';
-        
-        showNotification('Password changed successfully', 'success');
-    } catch (error) {
-        console.error('Error changing password:', error);
-        showNotification('Failed to change password: ' + error.message, 'error');
-    }
-}
 
 // Admin Dashboard Functions
 async function loadAdminDashboard() {
-    if (userRole !== 'admin') {
-        console.log("Non-admin user attempted to access admin dashboard");
-        return;
-    }
+    if (userRole !== 'admin') return;
     
     try {
         console.log("Loading admin dashboard with API key:", apiKey ? "Present" : "Missing");
         
-        const response = await fetch(`${API_BASE_URL}/admin/dashboard`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        });
+        const stats = await apiRequest('/admin/dashboard');
         
-        console.log("Admin dashboard response status:", response.status);
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Admin dashboard error details:", errorData);
-            throw new Error(errorData.detail || 'Failed to load admin dashboard');
-        }
-        
-        const stats = await response.json();
         console.log("Admin dashboard stats loaded:", stats);
         
         // Update dashboard stats
@@ -1379,6 +1696,21 @@ async function loadAdminDashboard() {
         document.getElementById('active-tiffins-count').textContent = stats.active_tiffins;
         document.getElementById('monthly-revenue').textContent = `₹${stats.monthly_revenue.toFixed(2)}`;
         document.getElementById('today-deliveries').textContent = stats.today_deliveries;
+        
+        // Additional stats that might be available
+        if (stats.pending_requests) {
+            const pendingRequestsBadge = document.createElement('span');
+            pendingRequestsBadge.className = 'badge';
+            pendingRequestsBadge.textContent = stats.pending_requests;
+            document.querySelector('.quick-action-card[data-page="manage-tiffins"]').appendChild(pendingRequestsBadge);
+        }
+        
+        if (stats.unpaid_invoices) {
+            const unpaidInvoicesBadge = document.createElement('span');
+            unpaidInvoicesBadge.className = 'badge';
+            unpaidInvoicesBadge.textContent = stats.unpaid_invoices;
+            document.querySelector('.quick-action-card[data-page="generate-invoices"]').appendChild(unpaidInvoicesBadge);
+        }
         
         // Load pending requests
         loadPendingRequests();
@@ -1388,27 +1720,16 @@ async function loadAdminDashboard() {
         showNotification('Failed to load dashboard stats: ' + error.message, 'error');
     }
 }
+
+
 async function loadPendingRequests() {
     if (userRole !== 'admin') return;
     
     try {
         console.log("Loading pending requests");
         
-        const response = await fetch(`${API_BASE_URL}/admin/tiffin-requests?status=pending`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        });
+        const requests = await apiRequest('/admin/tiffin-requests?status=pending');
         
-        console.log("Pending requests response status:", response.status);
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Pending requests error details:", errorData);
-            throw new Error(errorData.detail || 'Failed to load pending requests');
-        }
-        
-        const requests = await response.json();
         console.log(`Loaded ${requests.length} pending requests`);
         
         const requestsList = document.getElementById('pending-requests-list');
@@ -1416,7 +1737,7 @@ async function loadPendingRequests() {
         if (requests.length === 0) {
             requestsList.innerHTML = `
                 <div class="empty-state">
-                    <img src="empty-requests.svg" alt="No requests">
+                    <img src="empty.svg" alt="No requests">
                     <p>No pending special requests</p>
                 </div>
             `;
@@ -1484,6 +1805,9 @@ async function loadPendingRequests() {
         `;
     }
 }
+
+
+
 // Manage Users Functions
 async function loadManageUsers() {
     if (userRole !== 'admin') return;
@@ -1491,21 +1815,8 @@ async function loadManageUsers() {
     try {
         console.log("Loading manage users with API key:", apiKey ? "Present" : "Missing");
         
-        const response = await fetch(`${API_BASE_URL}/admin/users`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        });
+        const users = await apiRequest('/admin/users');
         
-        console.log("Manage users response status:", response.status);
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Manage users error details:", errorData);
-            throw new Error(errorData.detail || 'Failed to load users');
-        }
-        
-        const users = await response.json();
         console.log(`Loaded ${users.length} users`);
         
         displayUsers(users);
@@ -1519,7 +1830,6 @@ async function loadManageUsers() {
         `;
     }
 }
-
 function displayUsers(users, searchQuery = '') {
     const usersList = document.getElementById('users-list');
     
@@ -1540,7 +1850,7 @@ function displayUsers(users, searchQuery = '') {
     if (filteredUsers.length === 0) {
         usersList.innerHTML = `
             <div class="empty-state">
-                <img src="empty-users.svg" alt="No users">
+                <img src="empty.svg" alt="No users">
                 <p>No users found</p>
             </div>
         `;
@@ -1595,39 +1905,11 @@ async function showUserDetails(userId) {
     try {
         console.log(`Loading details for user: ${userId}`);
         
-        const response = await fetch(`${API_BASE_URL}/admin/users/${userId}`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        });
-        
-        console.log("User details response status:", response.status);
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("User details error:", errorData);
-            throw new Error(errorData.detail || 'Failed to fetch user details');
-        }
-        
-        const user = await response.json();
+        const user = await apiRequest(`/admin/users/${userId}`);
         console.log("User details loaded:", user);
         
         // Fetch user stats
-        const statsResponse = await fetch(`${API_BASE_URL}/admin/user/${userId}/stats`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        });
-        
-        console.log("User stats response status:", statsResponse.status);
-        
-        if (!statsResponse.ok) {
-            const errorData = await statsResponse.json();
-            console.error("User stats error:", errorData);
-            throw new Error(errorData.detail || 'Failed to fetch user stats');
-        }
-        
-        const stats = await statsResponse.json();
+        const stats = await apiRequest(`/admin/user/${userId}/stats`);
         console.log("User stats loaded:", stats);
         
         // Populate modal
@@ -1771,7 +2053,6 @@ function setupUserDetailsListeners(user) {
     };
 }
 
-// Manage Tiffins Functions
 async function loadManageTiffins() {
     if (userRole !== 'admin') return;
     
@@ -1779,7 +2060,6 @@ async function loadManageTiffins() {
     
     // Load users for select dropdowns
     await loadUsersForSelect();
-    
     
     // Load existing tiffins
     loadExistingTiffins();
@@ -1847,52 +2127,29 @@ async function loadExistingTiffins(filters = {}) {
     try {
         console.log("Loading existing tiffins with filters:", filters);
         
-        let url = `${API_BASE_URL}/admin/tiffins`;
-        
-        // Add filters if provided
+        // Build query parameters
         const queryParams = [];
         if (filters.date) queryParams.push(`date=${filters.date}`);
         if (filters.status) queryParams.push(`status=${filters.status}`);
+        if (filters.time) queryParams.push(`time=${filters.time}`);
+        if (filters.user_id) queryParams.push(`user_id=${filters.user_id}`);
         
-        if (queryParams.length > 0) {
-            url += `?${queryParams.join('&')}`;
-        }
+        const queryString = queryParams.length > 0 ? `?${queryParams.join('&')}` : '';
         
-        console.log("Fetching tiffins from:", url);
+        const response = await apiRequest(`/admin/tiffins${queryString}`);
         
-        const response = await fetch(url, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        });
+        console.log("Existing tiffins response:", response);
         
-        console.log("Existing tiffins response status:", response.status);
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Existing tiffins error:", errorData);
-            throw new Error(errorData.detail || 'Failed to load tiffins');
-        }
-        
-        const tiffins = await response.json();
+        // The API now returns data in a paginated format
+        const tiffins = response.data || [];
         console.log(`Loaded ${tiffins.length} existing tiffins`);
-        
-        // Sort by date (newest first) and time
-        tiffins.sort((a, b) => {
-            const dateA = new Date(a.date);
-            const dateB = new Date(b.date);
-            if (dateA.getTime() !== dateB.getTime()) {
-                return dateB - dateA;
-            }
-            return a.delivery_time.localeCompare(b.delivery_time);
-        });
         
         const tiffinsList = document.getElementById('manage-tiffins-list');
         
         if (tiffins.length === 0) {
             tiffinsList.innerHTML = `
                 <div class="empty-state">
-                    <img src="empty-tiffins.svg" alt="No tiffins">
+                    <img src="empty.svg" alt="No tiffins">
                     <p>No tiffins found</p>
                 </div>
             `;
@@ -1956,85 +2213,94 @@ async function loadNoticesPolls() {
     loadAdminPolls();
 }
 
-async function loadAdminNotices() {
+
+
+async function loadAdminInvoices(filters = {}) {
     try {
-        console.log("Loading admin notices with API key:", apiKey ? "Present" : "Missing");
+        // Build query parameters
+        const queryParams = [];
+        if (filters.user_id) queryParams.push(`user_id=${filters.user_id}`);
+        if (filters.paid !== undefined) queryParams.push(`paid=${filters.paid}`);
+        if (filters.start_date) queryParams.push(`start_date=${filters.start_date}`);
+        if (filters.end_date) queryParams.push(`end_date=${filters.end_date}`);
         
-        const response = await fetch(`${API_BASE_URL}/user/notices`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        });
+        const queryString = queryParams.length > 0 ? `?${queryParams.join('&')}` : '';
         
-        console.log("Admin notices response status:", response.status);
+        const invoices = await apiRequest(`/admin/invoices${queryString}`);
         
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Admin notices error details:", errorData);
-            throw new Error(errorData.detail || 'Failed to load notices');
-        }
+        const invoicesList = document.getElementById('admin-invoices-list');
         
-        const notices = await response.json();
-        console.log(`Loaded ${notices.length} admin notices`);
-        
-        const noticesList = document.getElementById('admin-notices-list');
-        
-        if (notices.length === 0) {
-            noticesList.innerHTML = `
+        if (invoices.length === 0) {
+            invoicesList.innerHTML = `
                 <div class="empty-state">
-                    <img src="empty-notices.svg" alt="No notices">
-                    <p>No notices found</p>
+                    <img src="empty.svg" alt="No invoices">
+                    <p>No invoices found</p>
                 </div>
             `;
             return;
         }
         
-        // Sort by creation date (newest first)
-        notices.sort((a, b) => {
-            const dateA = new Date(a.created_at);
-            const dateB = new Date(b.created_at);
-            return dateB - dateA;
-        });
+        let invoicesHTML = '';
         
-        let noticesHTML = '';
-        
-        notices.forEach(notice => {
-            const priorityClass = notice.priority === 0 ? 'normal' : notice.priority === 1 ? 'important' : 'urgent';
-            const priorityText = notice.priority === 0 ? 'Normal' : notice.priority === 1 ? 'Important' : 'Urgent';
+        invoices.forEach(invoice => {
+            const statusClass = invoice.paid ? 'paid' : 'unpaid';
+            const statusText = invoice.paid ? 'Paid' : 'Unpaid';
+            const userName = invoice.user_details ? invoice.user_details.name : invoice.user_id;
             
-            noticesHTML += `
-                <div class="notice-card" data-notice-id="${notice._id}">
-                    <div class="notice-card-header">
-                        <span class="notice-card-title">${notice.title}</span>
-                        <span class="notice-priority ${priorityClass}">${priorityText}</span>
+            invoicesHTML += `
+                <div class="invoice-card" data-invoice-id="${invoice._id}">
+                    <div class="invoice-card-header">
+                        <span>Invoice #${invoice._id.substring(0, 8)}</span>
+                        <span class="invoice-status ${statusClass}">${statusText}</span>
                     </div>
-                    <div class="notice-card-body">
-                        <div class="notice-card-content">${notice.content}</div>
-                        <div class="notice-card-footer">
-                            <span>Created: ${formatDate(notice.created_at)}</span>
-                            <button class="warning-button delete-notice-btn">Delete</button>
+                    <div class="invoice-card-body">
+                        <div class="invoice-card-user">
+                            <strong>User:</strong> ${userName}
                         </div>
+                        <div class="invoice-card-dates">
+                            <div class="invoice-card-date">
+                                From
+                                <span>${formatDate(invoice.start_date)}</span>
+                            </div>
+                            <div class="invoice-card-date">
+                                To
+                                <span>${formatDate(invoice.end_date)}</span>
+                            </div>
+                        </div>
+                        <div class="invoice-card-tiffins">
+                            <div class="invoice-card-tiffins-title">Total Tiffins</div>
+                            <div class="invoice-card-tiffin-count">${invoice.tiffins.length}</div>
+                        </div>
+                        <div class="invoice-card-total">
+                            <span>Total Amount</span>
+                            <span class="invoice-card-amount">₹${invoice.total_amount.toFixed(2)}</span>
+                        </div>
+                        ${!invoice.paid ? `
+                        <button class="action-button mark-paid-btn" data-invoice-id="${invoice._id}">
+                            Mark as Paid
+                        </button>
+                        ` : ''}
                     </div>
                 </div>
             `;
         });
         
-        noticesList.innerHTML = noticesHTML;
+        invoicesList.innerHTML = invoicesHTML;
         
-        // Add event listeners to delete buttons
-        document.querySelectorAll('.delete-notice-btn').forEach(btn => {
+        // Add event listeners to mark paid buttons
+        document.querySelectorAll('.mark-paid-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const noticeId = e.target.closest('.notice-card').dataset.noticeId;
-                deleteNotice(noticeId);
+                const invoiceId = e.target.dataset.invoiceId;
+                markInvoicePaid(invoiceId);
             });
         });
         
     } catch (error) {
-        console.error('Error loading admin notices:', error);
-        document.getElementById('admin-notices-list').innerHTML = `
+        console.error('Error loading admin invoices:', error);
+        document.getElementById('admin-invoices-list').innerHTML = `
             <div class="empty-state">
-                <p>Error loading notices: ${error.message}</p>
+                <p>Error loading invoices: ${error.message}</p>
             </div>
         `;
     }
@@ -2066,7 +2332,7 @@ async function loadAdminPolls() {
         if (polls.length === 0) {
             pollsList.innerHTML = `
                 <div class="empty-state">
-                    <img src="empty-polls.svg" alt="No polls">
+                    <img src="empty.svg" alt="No polls">
                     <p>No active polls found</p>
                 </div>
             `;
@@ -2140,6 +2406,85 @@ async function loadAdminPolls() {
     }
 }
 
+async function loadAdminNotices() {
+    try {
+        console.log("Loading admin notices with API key:", apiKey ? "Present" : "Missing");
+        
+        // We can use the standard notices endpoint but will display all notices including expired ones
+        const notices = await apiRequest('/admin/notices');
+        
+        console.log(`Loaded ${notices.length} admin notices`);
+        
+        const noticesList = document.getElementById('admin-notices-list');
+        
+        if (notices.length === 0) {
+            noticesList.innerHTML = `
+                <div class="empty-state">
+                    <img src="empty.svg" alt="No notices">
+                    <p>No notices found</p>
+                </div>
+            `;
+            return;
+        }
+        
+        // Sort by creation date (newest first)
+        notices.sort((a, b) => {
+            const dateA = new Date(a.created_at);
+            const dateB = new Date(b.created_at);
+            return dateB - dateA;
+        });
+        
+        let noticesHTML = '';
+        
+        notices.forEach(notice => {
+            const priorityClass = notice.priority === 0 ? 'normal' : notice.priority === 1 ? 'important' : 'urgent';
+            const priorityText = notice.priority === 0 ? 'Normal' : notice.priority === 1 ? 'Important' : 'Urgent';
+            
+            // Format expiration date if it exists
+            let expiresText = '';
+            if (notice.expires_at) {
+                expiresText = `<span class="notice-expires">Expires: ${formatDate(notice.expires_at)}</span>`;
+            }
+            
+            noticesHTML += `
+                <div class="notice-card" data-notice-id="${notice._id}">
+                    <div class="notice-card-header">
+                        <span class="notice-card-title">${notice.title}</span>
+                        <span class="notice-priority ${priorityClass}">${priorityText}</span>
+                    </div>
+                    <div class="notice-card-body">
+                        <div class="notice-card-content">${notice.content}</div>
+                        <div class="notice-card-footer">
+                            <span>Created: ${formatDate(notice.created_at)}</span>
+                            ${expiresText}
+                            <button class="warning-button delete-notice-btn">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+        
+        noticesList.innerHTML = noticesHTML;
+        
+        // Add event listeners to delete buttons
+        document.querySelectorAll('.delete-notice-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const noticeId = e.target.closest('.notice-card').dataset.noticeId;
+                deleteNotice(noticeId);
+            });
+        });
+        
+    } catch (error) {
+        console.error('Error loading admin notices:', error);
+        document.getElementById('admin-notices-list').innerHTML = `
+            <div class="empty-state">
+                <p>Error loading notices: ${error.message}</p>
+            </div>
+        `;
+    }
+}
+
 async function deleteNotice(noticeId) {
     showConfirmDialog(
         'Delete Notice',
@@ -2148,20 +2493,9 @@ async function deleteNotice(noticeId) {
             try {
                 console.log(`Deleting notice: ${noticeId}`);
                 
-                const response = await fetch(`${API_BASE_URL}/admin/notices/${noticeId}`, {
-                    method: 'DELETE',
-                    headers: {
-                        'X-API-Key': apiKey
-                    }
+                await apiRequest(`/admin/notices/${noticeId}`, {
+                    method: 'DELETE'
                 });
-                
-                console.log("Delete notice response status:", response.status);
-                
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    console.error("Delete notice error:", errorData);
-                    throw new Error(errorData.detail || 'Failed to delete notice');
-                }
                 
                 showNotification('Notice deleted successfully', 'success');
                 
@@ -2175,6 +2509,117 @@ async function deleteNotice(noticeId) {
         }
     );
 }
+
+async function loadAdminPolls() {
+    try {
+        console.log("Loading admin polls with API key:", apiKey ? "Present" : "Missing");
+        
+        // Get all polls including inactive ones
+        const polls = await apiRequest('/admin/polls');
+        
+        console.log(`Loaded ${polls.length} admin polls`);
+        
+        const pollsList = document.getElementById('admin-polls-list');
+        
+        if (polls.length === 0) {
+            pollsList.innerHTML = `
+                <div class="empty-state">
+                    <img src="empty.svg" alt="No polls">
+                    <p>No active polls found</p>
+                </div>
+            `;
+            return;
+        }
+        
+        // Sort by end date (soonest first)
+        polls.sort((a, b) => {
+            const dateA = new Date(a.end_date);
+            const dateB = new Date(b.end_date);
+            return dateA - dateB;
+        });
+        
+        let pollsHTML = '';
+        
+        polls.forEach(poll => {
+            let optionsHTML = '';
+            
+            poll.options.forEach((option, index) => {
+                const totalVotes = poll.options.reduce((sum, opt) => sum + opt.votes, 0);
+                const percentage = totalVotes > 0 ? Math.round((option.votes / totalVotes) * 100) : 0;
+                
+                optionsHTML += `
+                    <div class="poll-option">
+                        <span class="poll-option-label">${option.option}</span>
+                        <div class="poll-option-progress">
+                            <div class="poll-option-bar" style="width: ${percentage}%"></div>
+                        </div>
+                        <span class="poll-option-percentage">${percentage}% (${option.votes})</span>
+                    </div>
+                `;
+            });
+            
+            // Determine poll status
+            const now = new Date();
+            const startDate = new Date(poll.start_date);
+            const endDate = new Date(poll.end_date);
+            
+            let statusClass = 'inactive';
+            let statusText = 'Inactive';
+            
+            if (poll.active) {
+                if (now < startDate) {
+                    statusClass = 'pending';
+                    statusText = 'Pending';
+                } else if (now <= endDate) {
+                    statusClass = 'active';
+                    statusText = 'Active';
+                } else {
+                    statusClass = 'ended';
+                    statusText = 'Ended';
+                }
+            }
+            
+            pollsHTML += `
+                <div class="poll-card" data-poll-id="${poll._id}">
+                    <div class="poll-card-header">
+                        <span class="poll-card-title">${poll.question}</span>
+                        <span class="poll-status ${statusClass}">${statusText}</span>
+                    </div>
+                    <div class="poll-card-body">
+                        <div class="poll-options">
+                            ${optionsHTML}
+                        </div>
+                        <div class="poll-card-footer">
+                            <span>Start: ${formatDate(poll.start_date)}</span>
+                            <span>End: ${formatDate(poll.end_date)}</span>
+                            <button class="warning-button delete-poll-btn">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+        
+        pollsList.innerHTML = pollsHTML;
+        
+        // Add event listeners to delete buttons
+        document.querySelectorAll('.delete-poll-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const pollId = e.target.closest('.poll-card').dataset.pollId;
+                deletePoll(pollId);
+            });
+        });
+        
+    } catch (error) {
+        console.error('Error loading admin polls:', error);
+        document.getElementById('admin-polls-list').innerHTML = `
+            <div class="empty-state">
+                <p>Error loading polls: ${error.message}</p>
+            </div>
+        `;
+    }
+}
+
 async function deletePoll(pollId) {
     showConfirmDialog(
         'Delete Poll',
@@ -2183,20 +2628,9 @@ async function deletePoll(pollId) {
             try {
                 console.log(`Deleting poll: ${pollId}`);
                 
-                const response = await fetch(`${API_BASE_URL}/admin/polls/${pollId}`, {
-                    method: 'DELETE',
-                    headers: {
-                        'X-API-Key': apiKey
-                    }
+                await apiRequest(`/admin/polls/${pollId}`, {
+                    method: 'DELETE'
                 });
-                
-                console.log("Delete poll response status:", response.status);
-                
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    console.error("Delete poll error:", errorData);
-                    throw new Error(errorData.detail || 'Failed to delete poll');
-                }
                 
                 showNotification('Poll deleted successfully', 'success');
                 
@@ -2210,7 +2644,6 @@ async function deletePoll(pollId) {
         }
     );
 }
-
 
 // Generate Invoices Functions
 async function loadGenerateInvoices() {
@@ -2239,18 +2672,8 @@ async function loadAdminInvoices(filters = {}) {
         // Example data - in a real app this would come from the API
         const invoices = [
             {
-                _id: '61f3c4b2e12e45a789b3c2d1',
-                user_id: 'user123',
-                start_date: '2023-05-01',
-                end_date: '2023-05-31',
-                tiffins: Array(15).fill('tiffin'),
-                total_amount: 2250.00,
-                paid: true,
-                generated_at: '2023-06-01T10:00:00.000Z'
-            },
-            {
                 _id: '62a1b3c4d5e6f7g8h9i0j1k2',
-                user_id: 'user456',
+                user_id: 'test123',
                 start_date: '2023-05-01',
                 end_date: '2023-05-31',
                 tiffins: Array(12).fill('tiffin'),
@@ -2263,7 +2686,7 @@ async function loadAdminInvoices(filters = {}) {
         if (invoices.length === 0) {
             invoicesList.innerHTML = `
                 <div class="empty-state">
-                    <img src="empty-invoices.svg" alt="No invoices">
+                    <img src="empty.svg" alt="No invoices">
                     <p>No invoices found</p>
                 </div>
             `;
@@ -2348,24 +2771,10 @@ async function generateInvoices() {
         
         showNotification('Generating invoices...', 'info');
         
-        const response = await fetch(`${API_BASE_URL}/admin/generate-invoices`, {
-            method: 'POST',
-            headers: {
-                'X-API-Key': apiKey,
-                                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                start_date: startDate,
-                end_date: endDate
-            })
+        // The API expects start_date and end_date as query parameters
+        const result = await apiRequest(`/admin/generate-invoices?start_date=${startDate}&end_date=${endDate}`, {
+            method: 'POST'
         });
-        
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to generate invoices');
-        }
-        
-        const result = await response.json();
         
         showNotification(`Successfully generated ${result.generated_invoices} invoices`, 'success');
         
@@ -2374,7 +2783,7 @@ async function generateInvoices() {
         
     } catch (error) {
         console.error('Error generating invoices:', error);
-        showNotification(error.message, 'error');
+        showNotification('Failed to generate invoices: ' + error.message, 'error');
     }
 }
 
@@ -2384,17 +2793,9 @@ async function markInvoicePaid(invoiceId) {
         'Are you sure you want to mark this invoice as paid?',
         async () => {
             try {
-                const response = await fetch(`${API_BASE_URL}/admin/invoices/${invoiceId}/mark-paid`, {
-                    method: 'PUT',
-                    headers: {
-                        'X-API-Key': apiKey
-                    }
+                await apiRequest(`/admin/invoices/${invoiceId}/mark-paid`, {
+                    method: 'PUT'
                 });
-                
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'Failed to mark invoice as paid');
-                }
                 
                 showNotification('Invoice marked as paid successfully', 'success');
                 
@@ -2403,7 +2804,7 @@ async function markInvoicePaid(invoiceId) {
                 
             } catch (error) {
                 console.error('Error marking invoice as paid:', error);
-                showNotification(error.message, 'error');
+                showNotification('Failed to mark invoice as paid: ' + error.message, 'error');
             }
         }
     );
@@ -2623,35 +3024,36 @@ function setupEventListeners() {
         document.getElementById('register-form').classList.remove('hidden');
         document.getElementById('login-form').classList.add('hidden');
     });
-    const noticesTabBtns = document.querySelectorAll('#notices-polls-tabs .tab-btn');
-    noticesTabBtns.forEach(btn => {
-        btn.addEventListener('click', function() {
-            console.log('Notices tab clicked:', this.getAttribute('data-tab'));
-            
-            // Remove active class from all tabs
-            document.querySelectorAll('#notices-polls-tabs .tab-btn').forEach(tab => {
-                tab.classList.remove('active');
-            });
-            
-            // Add active class to clicked tab
-            this.classList.add('active');
-            
-            // Hide all tab panes
-            document.querySelectorAll('#notices-polls-page .tab-pane').forEach(pane => {
-                pane.classList.remove('active');
-            });
-            
-            // Show selected tab pane
-            const tabId = this.getAttribute('data-tab');
-            const targetPane = document.getElementById(`${tabId}-tab`);
-            if (targetPane) {
-                targetPane.classList.add('active');
-                console.log('Activating pane:', tabId);
-            } else {
-                console.error('Could not find tab pane:', tabId);
-            }
+
+
+    // Notices & Polls tabs
+    document.querySelector('#notices-polls-tabs .tab-btn[data-tab="notices"]').addEventListener('click', function() {
+        document.querySelectorAll('#notices-polls-tabs .tab-btn').forEach(tab => {
+            tab.classList.remove('active');
         });
+        this.classList.add('active');
+        
+        document.querySelectorAll('#notices-polls-page .tab-pane').forEach(pane => {
+            pane.classList.remove('active');
+        });
+        
+        document.getElementById('notices-tab').classList.add('active');
     });
+    
+    document.querySelector('#notices-polls-tabs .tab-btn[data-tab="polls"]').addEventListener('click', function() {
+        document.querySelectorAll('#notices-polls-tabs .tab-btn').forEach(tab => {
+            tab.classList.remove('active');
+        });
+        this.classList.add('active');
+        
+        document.querySelectorAll('#notices-polls-page .tab-pane').forEach(pane => {
+            pane.classList.remove('active');
+        });
+        
+        document.getElementById('polls-tab').classList.add('active');
+    });
+
+
     const tiffinTabBtns = document.querySelectorAll('.tiffin-management-tabs .tab-btn');
     tiffinTabBtns.forEach(btn => {
         btn.addEventListener('click', function() {
@@ -2821,7 +3223,8 @@ function setupEventListeners() {
     document.getElementById('submit-notice').addEventListener('click', createNotice);
     
     // Create poll
-    document.getElementById('add-poll-btn').addEventListener('click', () => {
+    document.getElementById('add-poll-btn').addEventListener('click', function() {
+        setupPollCreationModal();
         document.getElementById('create-poll-modal').classList.add('active');
     });
     
@@ -2934,6 +3337,241 @@ function setupEventListeners() {
     });
 }
 
+
+async function showVotePollModal(pollId) {
+    try {
+        console.log(`Loading poll details for voting: ${pollId}`);
+        
+        // Fetch poll details
+        const poll = await apiRequest(`/user/polls/${pollId}`);
+        
+        // Create a modal dynamically
+        const modal = document.createElement('div');
+        modal.className = 'modal active';
+        modal.id = 'vote-poll-modal';
+        
+        let optionsHTML = '';
+        poll.options.forEach((option, index) => {
+            optionsHTML += `
+                <div class="vote-option">
+                    <input type="radio" name="poll-vote" id="option-${index}" value="${index}">
+                    <label for="option-${index}">${option.option}</label>
+                </div>
+            `;
+        });
+        
+        modal.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Vote on Poll</h2>
+                    <button class="close-modal">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <h3>${poll.question}</h3>
+                    <div class="vote-options">
+                        ${optionsHTML}
+                    </div>
+                    <button id="submit-vote" class="action-button">Submit Vote</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // Close button event
+        modal.querySelector('.close-modal').addEventListener('click', () => {
+            document.body.removeChild(modal);
+        });
+        
+        // Submit vote button
+        modal.querySelector('#submit-vote').addEventListener('click', async () => {
+            const selectedOption = modal.querySelector('input[name="poll-vote"]:checked');
+            
+            if (!selectedOption) {
+                showNotification('Please select an option', 'error');
+                return;
+            }
+            
+            try {
+                await apiRequest(`/user/polls/${pollId}/vote`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        option_index: parseInt(selectedOption.value)
+                    })
+                });
+                
+                showNotification('Vote submitted successfully', 'success');
+                document.body.removeChild(modal);
+                
+                // Reload polls
+                loadPolls();
+                
+            } catch (error) {
+                console.error('Error submitting vote:', error);
+                showNotification(error.message, 'error');
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error showing vote poll modal:', error);
+        showNotification(error.message, 'error');
+    }
+}
+
+async function showApproveRequestModal(requestId) {
+    try {
+        console.log(`Loading request details for approval: ${requestId}`);
+        
+        const request = await apiRequest(`/admin/tiffin-requests/${requestId}`);
+        console.log("Request details loaded:", request);
+        
+        // Create a modal dynamically
+        const modal = document.createElement('div');
+        modal.className = 'modal active';
+        modal.id = 'approve-request-modal';
+        
+        modal.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Approve Special Request</h2>
+                    <button class="close-modal">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Request from: ${request.user_id}</label>
+                        <p>${request.description}</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="approve-date">Date</label>
+                        <input type="date" id="approve-date" value="${request.preferred_date}" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="approve-time">Time Slot</label>
+                        <select id="approve-time" required>
+                            <option value="morning" ${request.preferred_time === 'morning' ? 'selected' : ''}>Morning</option>
+                            <option value="afternoon" ${request.preferred_time === 'afternoon' ? 'selected' : ''}>Afternoon</option>
+                            <option value="evening" ${request.preferred_time === 'evening' ? 'selected' : ''}>Evening</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="approve-price">Price (₹)</label>
+                        <input type="number" id="approve-price" min="0" step="0.01" value="150" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="approve-delivery">Delivery Time</label>
+                        <input type="time" id="approve-delivery" value="12:00" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="approve-cancellation">Cancellation Time</label>
+                        <input type="time" id="approve-cancellation" value="08:00" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="approve-menu-items">Menu Items</label>
+                        <div class="menu-items-container">
+                            <div class="menu-item-input">
+                                <input type="text" id="approve-menu-item" placeholder="Menu item">
+                                <button type="button" id="add-approve-menu-item" class="add-menu-item">+</button>
+                            </div>
+                            <div id="approve-menu-items-list"></div>
+                        </div>
+                    </div>
+                    <button id="submit-approval" class="action-button">Approve Request</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // Add event listener for adding menu items
+        document.getElementById('add-approve-menu-item').addEventListener('click', () => {
+            const menuItemInput = document.getElementById('approve-menu-item');
+            const menuItem = menuItemInput.value.trim();
+            
+            if (menuItem) {
+                addMenuItem(menuItem, 'approve-menu-items-list');
+                menuItemInput.value = '';
+            }
+        });
+        
+        // Close button event
+        modal.querySelector('.close-modal').addEventListener('click', () => {
+            document.body.removeChild(modal);
+        });
+        
+        // Submit approval button
+        modal.querySelector('#submit-approval').addEventListener('click', async () => {
+            const date = modal.querySelector('#approve-date').value;
+            const time = modal.querySelector('#approve-time').value;
+            const price = parseFloat(modal.querySelector('#approve-price').value);
+            const deliveryTime = modal.querySelector('#approve-delivery').value;
+            const cancellationTime = modal.querySelector('#approve-cancellation').value;
+            const menuItems = getMenuItems('approve-menu-items-list');
+            
+            if (!date || !time || isNaN(price) || !deliveryTime || !cancellationTime) {
+                showNotification('Please fill in all fields', 'error');
+                return;
+            }
+            
+            if (menuItems.length === 0) {
+                // Add a default menu item if none provided
+                menuItems.push("Special Tiffin");
+            }
+            
+            try {
+                await apiRequest(`/admin/tiffin-requests/${requestId}/approve`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        date,
+                        time,
+                        price,
+                        delivery_time: deliveryTime,
+                        cancellation_time: cancellationTime,
+                        menu_items: menuItems
+                    })
+                });
+                
+                showNotification('Request approved successfully', 'success');
+                document.body.removeChild(modal);
+                
+                // Reload pending requests
+                loadPendingRequests();
+                
+            } catch (error) {
+                console.error('Error approving request:', error);
+                showNotification(error.message, 'error');
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error showing approve request modal:', error);
+        showNotification(error.message, 'error');
+    }
+}
+
+async function rejectRequest(requestId) {
+    showConfirmDialog(
+        'Reject Request',
+        'Are you sure you want to reject this request?',
+        async () => {
+            try {
+                await apiRequest(`/admin/tiffin-requests/${requestId}/reject`, {
+                    method: 'POST'
+                });
+                
+                showNotification('Request rejected successfully', 'success');
+                
+                // Reload pending requests
+                loadPendingRequests();
+                
+            } catch (error) {
+                console.error('Error rejecting request:', error);
+                showNotification(error.message, 'error');
+            }
+        }
+    );
+}
+
+
 // Form Submission Functions
 async function createNotice() {
     try {
@@ -3011,76 +3649,152 @@ function addPollOption() {
 async function createPoll() {
     try {
         const question = document.getElementById('poll-question').value.trim();
-        const startDate = document.getElementById('poll-start-date').value;
-        const endDate = document.getElementById('poll-end-date').value;
-        
-        if (!question || !startDate || !endDate) {
-            showNotification('Please fill in all required fields', 'error');
+        if (!question) {
+            showNotification('Please enter a poll question', 'error');
             return;
         }
         
-        if (new Date(startDate) >= new Date(endDate)) {
-            showNotification('End date must be after start date', 'error');
-            return;
-        }
+        // Get all option inputs within the container
+        const optionInputs = document.querySelectorAll('#poll-options-container .poll-option');
         
-        // Get poll options
-        const optionInputs = document.querySelectorAll('.poll-option');
-        const options = Array.from(optionInputs)
-            .map(input => input.value.trim())
-            .filter(option => option);
-        
-        if (options.length < 2) {
+        if (!optionInputs || optionInputs.length < 2) {
             showNotification('Please add at least 2 options', 'error');
             return;
         }
         
-        const poll = {
+        const options = [];
+        for (const optionInput of optionInputs) {
+            const optionText = optionInput.value.trim();
+            if (optionText) {
+                options.push({
+                    option: optionText,
+                    votes: 0
+                });
+            }
+        }
+        
+        if (options.length < 2) {
+            showNotification('Please add at least 2 non-empty options', 'error');
+            return;
+        }
+        
+        const startDate = document.getElementById('poll-start-date').value;
+        const endDate = document.getElementById('poll-end-date').value;
+        
+        if (!startDate || !endDate) {
+            showNotification('Please select start and end dates', 'error');
+            return;
+        }
+        
+        // Convert to ISO format with time
+        const formattedStartDate = new Date(startDate).toISOString();
+        const formattedEndDate = new Date(endDate);
+        // Set end date to end of day (23:59:59) if it doesn't include time
+        if (endDate.length <= 10) {
+            formattedEndDate.setHours(23, 59, 59, 999);
+        }
+        
+        const pollData = {
             question,
-            options: options.map(option => ({ option, votes: 0 })),
-            start_date: new Date(startDate).toISOString(),
-            end_date: new Date(endDate).toISOString(),
+            options,
+            start_date: formattedStartDate,
+            end_date: formattedEndDate.toISOString(),
             active: true
         };
         
-        const response = await fetch(`${API_BASE_URL}/admin/polls`, {
+        await apiRequest('/admin/polls', {
             method: 'POST',
-            headers: {
-                'X-API-Key': apiKey,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(poll)
+            body: JSON.stringify(pollData)
         });
         
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to create poll');
-        }
-        
         showNotification('Poll created successfully', 'success');
-        document.getElementById('create-poll-modal').classList.remove('active');
         
-        // Clear form
+        // Clear the form
         document.getElementById('poll-question').value = '';
+        document.getElementById('poll-options-container').innerHTML = '';
         document.getElementById('poll-start-date').value = '';
         document.getElementById('poll-end-date').value = '';
-        document.getElementById('poll-options-container').innerHTML = `
-            <div class="poll-option-input">
-                <input type="text" class="poll-option" placeholder="Option 1">
-            </div>
-            <div class="poll-option-input">
-                <input type="text" class="poll-option" placeholder="Option 2">
-            </div>
-        `;
         
-        // Reload polls
+        // Add default empty options
+        addPollOption();
+        addPollOption();
+        
+        // Close the modal
+        document.getElementById('create-poll-modal').classList.remove('active');
+        
+        // Reload admin polls
         loadAdminPolls();
         
     } catch (error) {
         console.error('Error creating poll:', error);
-        showNotification(error.message, 'error');
+        showNotification('Failed to create poll: ' + error.message, 'error');
     }
 }
+
+// Helper function to add a poll option input
+function addPollOption() {
+    const optionsContainer = document.getElementById('poll-options-container');
+    if (!optionsContainer) {
+        console.error('Poll options container not found');
+        return;
+    }
+    
+    const optionCount = optionsContainer.querySelectorAll('.poll-option').length;
+    
+    const optionDiv = document.createElement('div');
+    optionDiv.className = 'poll-option-item';
+    
+    optionDiv.innerHTML = `
+        <input type="text" class="poll-option" placeholder="Option ${optionCount + 1}">
+        <button type="button" class="remove-option-btn">✕</button>
+    `;
+    
+    optionsContainer.appendChild(optionDiv);
+    
+    // Add event listener to remove button
+    optionDiv.querySelector('.remove-option-btn').addEventListener('click', function() {
+        optionsContainer.removeChild(optionDiv);
+    });
+    
+    // Focus the new input
+    optionDiv.querySelector('input').focus();
+}
+
+// Setup function for poll creation modal
+function setupPollCreationModal() {
+    // Clear existing options
+    const optionsContainer = document.getElementById('poll-options-container');
+    if (optionsContainer) {
+        optionsContainer.innerHTML = '';
+        
+        // Add two default empty options
+        addPollOption();
+        addPollOption();
+    }
+    
+    // Add event listener to add option button
+    const addOptionBtn = document.getElementById('add-poll-option');
+    if (addOptionBtn) {
+        // Remove existing event listeners to prevent duplicates
+        const newAddOptionBtn = addOptionBtn.cloneNode(true);
+        addOptionBtn.parentNode.replaceChild(newAddOptionBtn, addOptionBtn);
+        
+        newAddOptionBtn.addEventListener('click', addPollOption);
+    }
+    
+    // Add event listener to submit button
+    const submitPollBtn = document.getElementById('submit-poll');
+    if (submitPollBtn) {
+        // Remove existing event listeners to prevent duplicates
+        const newSubmitPollBtn = submitPollBtn.cloneNode(true);
+        submitPollBtn.parentNode.replaceChild(newSubmitPollBtn, submitPollBtn);
+        
+        newSubmitPollBtn.addEventListener('click', createPoll);
+    }
+}
+
+
+
 
 async function createUser() {
     try {
@@ -3253,22 +3967,14 @@ async function createTiffin() {
             cancellation_time: cancellationTime,
             delivery_time: deliveryTime,
             menu_items: menuItems,
-            assigned_users: assignedUsers
+            assigned_users: assignedUsers,
+            status: "scheduled"
         };
         
-        const response = await fetch(`${API_BASE_URL}/admin/tiffins`, {
+        await apiRequest('/admin/tiffins', {
             method: 'POST',
-            headers: {
-                'X-API-Key': apiKey,
-                'Content-Type': 'application/json'
-            },
             body: JSON.stringify(tiffin)
         });
-        
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to create tiffin');
-        }
         
         showNotification('Tiffin created successfully', 'success');
         
@@ -3297,6 +4003,7 @@ async function createTiffin() {
         showNotification(error.message, 'error');
     }
 }
+
 
 function addUserGroup() {
     const container = document.getElementById('user-groups-container');
@@ -3353,6 +4060,91 @@ function addUserGroup() {
     });
 }
 
+function updateUserInfo() {
+    if (!currentUser) {
+        console.error("Cannot update user info: currentUser is not defined");
+        return;
+    }
+
+    // Update user name and initial in sidebar
+    document.getElementById('user-name').textContent = currentUser.name || 'User';
+    document.getElementById('user-initial').textContent = getInitials(currentUser.name || 'User');
+    
+    // Update user role
+    document.getElementById('user-role').textContent = userRole === 'admin' ? 'Administrator' : 'User';
+    
+    // Show/hide admin section based on role
+    const adminSection = document.querySelector('.admin-section');
+    if (adminSection) {
+        if (userRole === 'admin') {
+            adminSection.classList.remove('hidden');
+        } else {
+            adminSection.classList.add('hidden');
+        }
+    }
+    
+    // Update profile page if it exists
+    updateProfilePage();
+}
+
+function updateProfilePage() {
+    // Skip if profile page elements don't exist yet
+    if (!document.getElementById('profile-name')) return;
+    
+    // Update profile information
+    document.getElementById('profile-name').textContent = currentUser.name || 'User';
+    document.getElementById('profile-user-id').textContent = currentUser.user_id || '';
+    document.getElementById('profile-initial').textContent = getInitials(currentUser.name || 'User');
+    
+    // Update form fields
+    document.getElementById('profile-edit-name').value = currentUser.name || '';
+    document.getElementById('profile-edit-email').value = currentUser.email || '';
+    document.getElementById('profile-edit-address').value = currentUser.address || '';
+    
+    // Update account statistics if available
+    if (currentUser.created_at) {
+        document.getElementById('member-since').textContent = formatDate(currentUser.created_at);
+    }
+    
+    // Load additional user stats if needed
+    loadUserStats();
+}
+
+// Helper function to get initials from name
+function getInitials(name) {
+    if (!name) return 'U';
+    
+    return name
+        .split(' ')
+        .map(word => word.charAt(0).toUpperCase())
+        .slice(0, 2)
+        .join('');
+}
+
+// Function to load additional user statistics
+async function loadUserStats() {
+    try {
+        // For admin, we don't need to fetch stats
+        if (userRole === 'admin') {
+            document.getElementById('profile-total-tiffins').textContent = 'N/A';
+            document.getElementById('profile-most-ordered').textContent = 'N/A';
+            return;
+        }
+        
+        // For regular users, fetch stats from API
+        const stats = await apiRequest('/user/dashboard/stats');
+        
+        if (stats) {
+            document.getElementById('profile-total-tiffins').textContent = stats.month_tiffins || '0';
+            document.getElementById('profile-most-ordered').textContent = stats.favorite_time || 'None';
+        }
+    } catch (error) {
+        console.error('Error loading user stats:', error);
+        document.getElementById('profile-total-tiffins').textContent = 'Error';
+        document.getElementById('profile-most-ordered').textContent = 'Error';
+    }
+}
+
 async function batchCreateTiffins() {
     try {
         const date = document.getElementById('batch-tiffin-date').value;
@@ -3397,32 +4189,20 @@ async function batchCreateTiffins() {
             cancellation_time: cancellationTime,
             delivery_time: deliveryTime,
             menu_items: menuItems,
-            assigned_users: []
+            status: "scheduled"
         };
         
-        const batchData = {
-            date,
-            time,
-            base_tiffin: baseTiffin,
-            user_groups: userGroups
-        };
-        
-        const response = await fetch(`${API_BASE_URL}/admin/batch-tiffins`, {
+        await apiRequest('/admin/batch-tiffins', {
             method: 'POST',
-            headers: {
-                'X-API-Key': apiKey,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(batchData)
+            body: JSON.stringify({
+                date,
+                time,
+                base_tiffin: baseTiffin,
+                user_groups: userGroups
+            })
         });
         
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to create batch tiffins');
-        }
-        
-        const result = await response.json();
-        showNotification(`Successfully created ${result.created_tiffins.length} tiffins`, 'success');
+        showNotification('Batch tiffins created successfully', 'success');
         
         // Clear form
         document.getElementById('batch-tiffin-date').value = '';
@@ -3469,4 +4249,3 @@ async function batchCreateTiffins() {
         showNotification(error.message, 'error');
     }
 }
-            
