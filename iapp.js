@@ -404,8 +404,6 @@ async function loadUpcomingTiffins() {
         nextWeek.setDate(nextWeek.getDate() + 7);
         const nextWeekStr = nextWeek.toISOString().split('T')[0];
         
-        // Use the general tiffins endpoint with date filter for future dates
-        // We'll use the date parameter to get tiffins after today
         const response = await apiRequest(`/user/tiffins?date=${today}`);
         console.log('Upcoming tiffins response:', response);
         
@@ -433,7 +431,7 @@ async function loadUpcomingTiffins() {
         if (tiffins.length === 0) {
             upcomingTiffins.innerHTML = `
                 <div class="empty-state">
-                    <img src="${createPlaceholderSVG('No Tiffins')}" alt="No upcoming tiffins">
+                    <img src="empty.svg" alt="No upcoming tiffins">
                     <p>No upcoming tiffins scheduled</p>
                 </div>
             `;
@@ -475,7 +473,7 @@ async function loadUpcomingTiffins() {
         if (tiffinsHTML === '') {
             upcomingTiffins.innerHTML = `
                 <div class="empty-state">
-                    <img src="${createPlaceholderSVG('No Tiffins')}" alt="No upcoming tiffins">
+                    <img src="empty.svg" alt="No upcoming tiffins">
                     <p>No valid upcoming tiffins found</p>
                 </div>
             `;
