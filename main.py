@@ -1328,7 +1328,43 @@ async def get_user_tiffins(
             status_code=500,
             detail=f"Failed to fetch user tiffins: {str(e)}"
         )
-
+@app.get("/user/tiffins/{tiffin_id}")
+async def get_user_tiffin_by_id(
+    tiffin_id: str,
+    user_id: str = Depends(verify_user)
+):
+    try:
+        if not is_valid_object_id(tiffin_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid tiffin ID format"
+            )
+            
+        # For regular users, only show tiffins assigned to them
+        # For admin, show any tiffin
+        query = {"_id": ObjectId(tiffin_id)}
+        if user_id != ADMIN_ID:
+            query["assigned_users"] = user_id
+            
+        tiffin = db.tiffins.find_one(query)
+        
+        if not tiffin:
+            raise HTTPException(
+                status_code=404,
+                detail="Tiffin not found"
+            )
+            
+        tiffin["_id"] = str(tiffin["_id"])
+        
+        return tiffin
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch tiffin: {str(e)}"
+        )
+        
 @app.get("/user/tiffins/today")
 async def get_user_today_tiffins(user_id: str = Depends(verify_user)):
     try:
