@@ -1376,19 +1376,18 @@ async def get_user_today_tiffins(user_id: str = Depends(verify_user)):
         
         tiffins = list(db.tiffins.find(query).sort("time", 1))
         
-        # Properly serialize the document including ObjectIDs
-        serialized_tiffins = []
+        # Manually convert ObjectIDs to strings
         for tiffin in tiffins:
-            serialized_tiffin = serialize_doc(tiffin)
-            serialized_tiffins.append(serialized_tiffin)
+            tiffin["_id"] = str(tiffin["_id"])
             
-        return serialized_tiffins
+        return tiffins
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch today's tiffins: {str(e)}"
         )
-        
+
+
 @app.get("/user/tiffins/upcoming")
 async def get_user_upcoming_tiffins(
     user_id: str = Depends(verify_user),
@@ -1406,18 +1405,17 @@ async def get_user_upcoming_tiffins(
         
         tiffins = list(db.tiffins.find(query).sort("date", 1).sort("time", 1))
         
-        # Properly serialize the document including ObjectIDs
-        serialized_tiffins = []
+        # Manually convert ObjectIDs to strings
         for tiffin in tiffins:
-            serialized_tiffin = serialize_doc(tiffin)
-            serialized_tiffins.append(serialized_tiffin)
+            tiffin["_id"] = str(tiffin["_id"])
             
-        return serialized_tiffins
+        return tiffins
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch upcoming tiffins: {str(e)}"
         )
+
 
 @app.post("/user/cancel-tiffin")
 async def cancel_tiffin(
