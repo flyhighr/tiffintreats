@@ -455,42 +455,50 @@ async def verify_admin(api_key: str = Depends(api_key_header), request: Request 
         )
     return True
 
-async def verify_user(api_key: str = Depends(api_key_header), request: Request = None):
-    # Check if it's admin first
-    if api_key == ADMIN_API_KEY:
-        return ADMIN_ID
-        
-    user = db.users.find_one({"api_key": api_key})
-    if not user:
-        # Log failed user access attempt
-        client_ip = request.client.host if request else "unknown"
-        log_security_event("user_access_failed", None, f"Invalid API key from IP: {client_ip}")
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API key"
-        )
+
+def ensure_timezone_aware(dt):
+    """Ensure a datetime is timezone aware by adding IST timezone if needed"""
+    if dt and not dt.tzinfo:
+        return IST.localize(dt)
+    return dt
     
-    # Check if API key is expired
-    if user.get("api_key_expiry"):
-        expiry = user["api_key_expiry"]
-        if isinstance(expiry, str):
-            expiry = datetime.fromisoformat(expiry)
-        if datetime.now(IST) > expiry:
-            log_security_event("expired_api_key", user["user_id"], "User attempted to use expired API key")
+async def verify_user(request: Request, api_key: str = Depends(api_key_header)):
+    try:
+        # Find the user by API key
+        user = db.users.find_one({"api_key": api_key})
+        if not user:
             raise HTTPException(
                 status_code=401,
-                detail="API key has expired. Please log in again."
+                detail="Invalid API key"
             )
-    
-    # Check if user is active
-    if not user.get("active", True):
-        log_security_event("inactive_user_access", user["user_id"], "Inactive user attempted to access API")
+            
+        # Check if user is active
+        if not user.get("active", False):
+            raise HTTPException(
+                status_code=403,
+                detail="User account is inactive"
+            )
+            
+        # Check if API key has expired
+        expiry = user.get("api_key_expiry")
+        if expiry:
+            # Make expiry timezone aware before comparing
+            expiry = ensure_timezone_aware(expiry)
+            if datetime.now(IST) > expiry:
+                raise HTTPException(
+                    status_code=401,
+                    detail="API key has expired. Please log in again."
+                )
+                
+        return user["user_id"]
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Authentication error: {str(e)}")
         raise HTTPException(
-            status_code=403,
-            detail="User account is inactive"
+            status_code=401,
+            detail="Authentication failed"
         )
-        
-    return user["user_id"]
 
 async def verify_api_key(api_key: str = Depends(api_key_header), request: Request = None):
     """Verify API key for both admin and regular users"""
