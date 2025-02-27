@@ -94,9 +94,7 @@ class TiffinBase(BaseModel):
     description: str
     price: float
     cancellation_time: str
-    delivery_time: str
     status: TiffinStatus = TiffinStatus.SCHEDULED
-    menu_items: List[str]
 
 class TiffinCreate(TiffinBase):
     assigned_users: List[str]
@@ -149,9 +147,7 @@ class TiffinRequestApproval(BaseModel):
     date: str
     time: TiffinTime
     price: float
-    delivery_time: str
     cancellation_time: str
-    menu_items: Optional[List[str]] = None
 
 class Invoice(BaseModel):
     user_id: str
@@ -705,7 +701,6 @@ async def create_tiffin(tiffin: TiffinCreate, _: bool = Depends(verify_admin)):
         # Validate time formats
         try:
             datetime.strptime(tiffin.cancellation_time, "%H:%M")
-            datetime.strptime(tiffin.delivery_time, "%H:%M")
             datetime.strptime(tiffin.date, "%Y-%m-%d")
         except ValueError:
             raise HTTPException(
@@ -745,6 +740,7 @@ async def create_tiffin(tiffin: TiffinCreate, _: bool = Depends(verify_admin)):
             status_code=500,
             detail=f"Failed to create tiffin: {str(e)}"
         )
+
 
 @app.post("/admin/batch-tiffins")
 async def create_batch_tiffins(
@@ -1438,6 +1434,9 @@ async def cancel_tiffin(
                 detail="Cancellation time has passed"
             )
         
+        # Get user details for cancellation record
+        user_details = db.users.find_one({"user_id": user_id}, {"name": 1, "email": 1})
+        
         # For admin, just change status
         if user_id == ADMIN_ID:
             result = db.tiffins.update_one(
@@ -1445,7 +1444,13 @@ async def cancel_tiffin(
                 {
                     "$set": {
                         "status": TiffinStatus.CANCELLED,
-                        "updated_at": datetime.now(IST)
+                        "updated_at": datetime.now(IST),
+                        "cancelled_by": {
+                            "user_id": ADMIN_ID,
+                            "name": "Administrator",
+                            "email": "admin@tiffintreats.com",
+                            "cancelled_at": datetime.now(IST)
+                        }
                     }
                 }
             )
@@ -1462,11 +1467,17 @@ async def cancel_tiffin(
                 }
                 db.notifications.insert_one(notification)
         else:
-            # For regular user, remove them from assigned_users
+            # For regular user, remove them from assigned_users and record who cancelled
             result = db.tiffins.update_one(
                 {"_id": ObjectId(tiffin_id)},
                 {
                     "$pull": {"assigned_users": user_id},
+                    "$push": {"cancellations": {
+                        "user_id": user_id,
+                        "name": user_details.get("name", "Unknown"),
+                        "email": user_details.get("email", "Unknown"),
+                        "cancelled_at": datetime.now(IST)
+                    }},
                     "$set": {"updated_at": datetime.now(IST)}
                 }
             )
@@ -2080,6 +2091,11 @@ async def get_active_polls(user_id: str = Depends(verify_user)):
             poll["has_voted"] = vote is not None
             if vote:
                 poll["user_vote"] = vote["option_index"]
+            
+            # For regular users, hide vote counts
+            if user_id != ADMIN_ID:
+                for option in poll["options"]:
+                    option["votes"] = 0
         
         return polls
     except Exception as e:
@@ -2110,7 +2126,6 @@ async def get_poll_by_id(
         
         poll["_id"] = str(poll["_id"])
         
-        # Check if user has already voted
         vote = db.poll_votes.find_one({
             "poll_id": ObjectId(poll_id),
             "user_id": user_id
@@ -2120,6 +2135,10 @@ async def get_poll_by_id(
         if vote:
             poll["user_vote"] = vote["option_index"]
         
+        if user_id != ADMIN_ID:
+            for option in poll["options"]:
+                option["votes"] = 0
+        
         return poll
     except HTTPException:
         raise
@@ -2128,7 +2147,7 @@ async def get_poll_by_id(
             status_code=500,
             detail=f"Failed to fetch poll: {str(e)}"
         )
-
+        
 @app.post("/user/polls/{poll_id}/vote")
 async def vote_poll(
     poll_id: str,
@@ -2192,7 +2211,14 @@ async def vote_poll(
                 {"$inc": {f"options.{option_index}.votes": 1}}
             )
         
-        return {"status": "success"}
+        # For regular users, don't return the results
+        if user_id != ADMIN_ID:
+            return {"status": "success", "message": "Your vote has been recorded"}
+        
+        # For admin, return the updated poll results
+        updated_poll = db.polls.find_one({"_id": ObjectId(poll_id)})
+        updated_poll["_id"] = str(updated_poll["_id"])
+        return {"status": "success", "poll": updated_poll}
     except HTTPException:
         raise
     except Exception as e:
@@ -2200,6 +2226,7 @@ async def vote_poll(
             status_code=500,
             detail=f"Failed to record vote: {str(e)}"
         )
+
 
 @app.put("/admin/polls/{poll_id}")
 async def update_poll(
