@@ -748,34 +748,22 @@ async def create_tiffin(tiffin: TiffinCreate, _: bool = Depends(verify_admin)):
 
 @app.post("/admin/batch-tiffins")
 async def create_batch_tiffins(
-    date: str,
-    time: TiffinTime,
     base_tiffin: TiffinBase,
     user_groups: List[List[str]],
     _: bool = Depends(verify_admin)
 ):
-    created_tiffins = []
-    
-    # Validate date format
     try:
-        datetime.strptime(date, "%Y-%m-%d")
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid date format. Use YYYY-MM-DD"
-        )
-    
-    # Validate time formats in base_tiffin
-    try:
-        datetime.strptime(base_tiffin.cancellation_time, "%H:%M")
-        datetime.strptime(base_tiffin.delivery_time, "%H:%M")
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid time format. Use HH:MM for cancellation_time and delivery_time"
-        )
-    
-    try:
+        # Validate time formats in base_tiffin
+        try:
+            datetime.strptime(base_tiffin.cancellation_time, "%H:%M")
+            datetime.strptime(base_tiffin.delivery_time, "%H:%M")
+            datetime.strptime(base_tiffin.date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid date or time format. Use YYYY-MM-DD for date and HH:MM for times"
+            )
+        
         for user_group in user_groups:
             # Skip empty groups
             if not user_group:
@@ -792,8 +780,6 @@ async def create_batch_tiffins(
             # Create tiffin for this group
             tiffin_dict = base_tiffin.dict()
             tiffin_dict.update({
-                "date": date,
-                "time": time,
                 "assigned_users": user_group,
                 "created_at": datetime.now(IST),
                 "updated_at": datetime.now(IST)
@@ -801,14 +787,13 @@ async def create_batch_tiffins(
             
             result = db.tiffins.insert_one(tiffin_dict)
             tiffin_id = str(result.inserted_id)
-            created_tiffins.append(tiffin_id)
             
             # Create notifications for assigned users
             for user_id in user_group:
                 notification = {
                     "user_id": user_id,
                     "title": "New Tiffin Scheduled",
-                    "message": f"A new tiffin has been scheduled for {date} ({time}).",
+                    "message": f"A new tiffin has been scheduled for {base_tiffin.date} ({base_tiffin.time}).",
                     "type": "info",
                     "read": False,
                     "created_at": datetime.now(IST)
@@ -817,8 +802,7 @@ async def create_batch_tiffins(
         
         return {
             "status": "success",
-            "created_tiffins": created_tiffins,
-            "count": len(created_tiffins)
+            "message": f"Created tiffins for {len(user_groups)} user groups"
         }
     except HTTPException:
         raise
