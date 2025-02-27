@@ -40,13 +40,46 @@ async function apiRequest(endpoint, options = {}) {
     try {
         const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
         
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error(`Error from ${endpoint}:`, errorData);
-            throw new Error(errorData.detail || 'Request failed');
+        let responseData;
+        const contentType = response.headers.get('content-type');
+        
+        if (contentType && contentType.includes('application/json')) {
+            responseData = await response.json();
+        } else {
+            const text = await response.text();
+            try {
+                // Try to parse as JSON anyway
+                responseData = JSON.parse(text);
+            } catch (e) {
+                // If it's not JSON, just use the text
+                responseData = text;
+            }
         }
         
-        return await response.json();
+        if (!response.ok) {
+            console.error(`Error from ${endpoint}:`, responseData);
+            
+            let errorMessage = 'Request failed';
+            
+            if (typeof responseData === 'object') {
+                if (responseData.detail) {
+                    if (Array.isArray(responseData.detail)) {
+                        // Handle Pydantic validation errors
+                        errorMessage = responseData.detail[0]?.msg || 'Validation error';
+                    } else {
+                        errorMessage = responseData.detail;
+                    }
+                } else if (responseData.message) {
+                    errorMessage = responseData.message;
+                }
+            } else if (typeof responseData === 'string') {
+                errorMessage = responseData;
+            }
+            
+            throw new Error(errorMessage);
+        }
+        
+        return responseData;
     } catch (error) {
         console.error(`API request to ${endpoint} failed:`, error);
         throw error;
@@ -335,12 +368,11 @@ async function loadTodayTiffin() {
     try {
         console.log("Loading today's tiffin");
         
-        // Let's first try to get all user tiffins and filter for today
+        // Since the specific endpoint is giving an error, let's use the general endpoint with today's date
         const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
-        
-        // Use the general tiffins endpoint with date filter
         const response = await apiRequest(`/user/tiffins?date=${today}`);
-        console.log('Today tiffin response:', response);
+        
+        console.log("Today's tiffins response:", response);
         
         // The API returns data in a paginated format
         const tiffins = response.data || [];
@@ -349,6 +381,11 @@ async function loadTodayTiffin() {
         
         const todayTiffinStatus = document.getElementById('today-tiffin-status');
         const nextDeliveryTime = document.getElementById('next-delivery-time');
+        
+        if (!todayTiffinStatus || !nextDeliveryTime) {
+            console.error("Today's tiffin elements not found");
+            return;
+        }
         
         if (tiffins.length === 0) {
             todayTiffinStatus.textContent = 'No tiffin scheduled for today';
@@ -387,8 +424,15 @@ async function loadTodayTiffin() {
         }
     } catch (error) {
         console.error('Error loading today\'s tiffin:', error);
-        document.getElementById('today-tiffin-status').textContent = 'Error loading tiffin';
-        document.getElementById('next-delivery-time').textContent = 'N/A';
+        const todayTiffinStatus = document.getElementById('today-tiffin-status');
+        const nextDeliveryTime = document.getElementById('next-delivery-time');
+        
+        if (todayTiffinStatus) {
+            todayTiffinStatus.textContent = 'Error loading tiffin';
+        }
+        if (nextDeliveryTime) {
+            nextDeliveryTime.textContent = 'N/A';
+        }
     }
 }
 
@@ -396,40 +440,31 @@ async function loadUpcomingTiffins() {
     try {
         console.log("Loading upcoming tiffins");
         
-        // Get today's date
+        const upcomingTiffinsElement = document.getElementById('upcoming-tiffins');
+        if (!upcomingTiffinsElement) {
+            console.error("Element 'upcoming-tiffins' not found");
+            return;
+        }
+        
+        // Since the specific endpoint is giving an error, let's try using the general endpoint
+        // with a date filter for upcoming tiffins
         const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
-        
-        // Calculate date 7 days from now
-        const nextWeek = new Date();
-        nextWeek.setDate(nextWeek.getDate() + 7);
-        const nextWeekStr = nextWeek.toISOString().split('T')[0];
-        
         const response = await apiRequest(`/user/tiffins?date=${today}`);
-        console.log('Upcoming tiffins response:', response);
+        
+        console.log("Upcoming tiffins response:", response);
         
         // The API returns data in a paginated format
-        let tiffins = response.data || [];
+        const tiffins = response.data || [];
         
-        // Filter to only include future tiffins (today and later)
-        tiffins = tiffins.filter(tiffin => {
+        // Filter to include only future tiffins (today and later)
+        const upcomingTiffins = tiffins.filter(tiffin => {
             return tiffin.date >= today && tiffin.status !== 'cancelled';
         });
         
-        // Sort by date (ascending)
-        tiffins.sort((a, b) => {
-            if (a.date !== b.date) {
-                return a.date.localeCompare(b.date);
-            }
-            // If same date, sort by time
-            return a.delivery_time.localeCompare(b.delivery_time);
-        });
+        console.log(`Found ${upcomingTiffins.length} upcoming tiffins after filtering`);
         
-        console.log(`Loaded ${tiffins.length} upcoming tiffins after filtering`);
-        
-        const upcomingTiffins = document.getElementById('upcoming-tiffins');
-        
-        if (tiffins.length === 0) {
-            upcomingTiffins.innerHTML = `
+        if (upcomingTiffins.length === 0) {
+            upcomingTiffinsElement.innerHTML = `
                 <div class="empty-state">
                     <img src="empty.svg" alt="No upcoming tiffins">
                     <p>No upcoming tiffins scheduled</p>
@@ -438,10 +473,19 @@ async function loadUpcomingTiffins() {
             return;
         }
         
+        // Sort by date (ascending)
+        upcomingTiffins.sort((a, b) => {
+            if (a.date !== b.date) {
+                return a.date.localeCompare(b.date);
+            }
+            // If same date, sort by time
+            return a.time.localeCompare(b.time);
+        });
+        
         let tiffinsHTML = '';
         
         // Limit to next 6 tiffins
-        const nextTiffins = tiffins.slice(0, 6);
+        const nextTiffins = upcomingTiffins.slice(0, 6);
         
         nextTiffins.forEach(tiffin => {
             // Skip if tiffin doesn't have required properties
@@ -471,7 +515,7 @@ async function loadUpcomingTiffins() {
         });
         
         if (tiffinsHTML === '') {
-            upcomingTiffins.innerHTML = `
+            upcomingTiffinsElement.innerHTML = `
                 <div class="empty-state">
                     <img src="empty.svg" alt="No upcoming tiffins">
                     <p>No valid upcoming tiffins found</p>
@@ -480,7 +524,7 @@ async function loadUpcomingTiffins() {
             return;
         }
         
-        upcomingTiffins.innerHTML = tiffinsHTML;
+        upcomingTiffinsElement.innerHTML = tiffinsHTML;
         
         // Add event listeners to tiffin cards
         document.querySelectorAll('.tiffin-card').forEach(card => {
@@ -507,16 +551,18 @@ async function loadUpcomingTiffins() {
         
     } catch (error) {
         console.error('Error loading upcoming tiffins:', error);
-        document.getElementById('upcoming-tiffins').innerHTML = `
-            <div class="empty-state">
-                <img src="${createPlaceholderSVG('Error')}" alt="Error">
-                <p>Could not load upcoming tiffins: ${error.message}</p>
-            </div>
-        `;
+        const upcomingTiffinsElement = document.getElementById('upcoming-tiffins');
+        if (upcomingTiffinsElement) {
+            upcomingTiffinsElement.innerHTML = `
+                <div class="empty-state">
+                    <img src="${createPlaceholderSVG('Error')}" alt="Error">
+                    <p>Could not load upcoming tiffins: ${error.message}</p>
+                </div>
+            `;
+        }
         document.getElementById('month-tiffin-count').textContent = `0 tiffins`;
     }
 }
-
 
 // Add this function to your JavaScript code
 function createPlaceholderSVG(text) {
@@ -725,12 +771,151 @@ async function showTiffinDetails(tiffinId) {
         if (modal) {
             modal.dataset.tiffinId = tiffin._id;
             modal.classList.add('active');
+            
+            // Ensure close button works properly
+            const closeBtn = modal.querySelector('.close-modal');
+            if (closeBtn) {
+                // Clear all existing event listeners
+                const newCloseBtn = closeBtn.cloneNode(true);
+                closeBtn.parentNode.replaceChild(newCloseBtn, closeBtn);
+                
+                // Add new event listener
+                newCloseBtn.addEventListener('click', () => {
+                    modal.classList.remove('active');
+                });
+            }
+            
+            // Apply the fix for admin users
+            if (userRole === 'admin') {
+                // Add a small delay to ensure the modal is fully rendered
+                setTimeout(fixTiffinStatusUpdate, 100);
+            }
         }
         
     } catch (error) {
         console.error('Error showing tiffin details:', error);
         showNotification('Could not load tiffin details: ' + (error.message || 'Unknown error'), 'error');
     }
+}
+
+// Add this function to fix the update status functionality
+function fixTiffinStatusUpdate() {
+    console.log("Fixing tiffin status update functionality");
+    
+    // Check if we're on the tiffin details modal
+    const modal = document.getElementById('tiffin-details-modal');
+    if (!modal || !modal.classList.contains('active')) {
+        console.log("Tiffin details modal not active");
+        return;
+    }
+    
+    // Get the tiffin ID from the modal
+    const tiffinId = modal.dataset.tiffinId;
+    if (!tiffinId) {
+        console.log("No tiffin ID found in modal");
+        return;
+    }
+    
+    console.log("Tiffin ID:", tiffinId);
+    
+    // Find the admin actions section
+    const adminActions = modal.querySelector('.tiffin-details-actions.admin-only');
+    if (!adminActions) {
+        console.log("Admin actions section not found");
+        return;
+    }
+    
+    // Clear existing content
+    adminActions.innerHTML = '';
+    
+    // Create a simple select element and update button
+    const statusSelect = document.createElement('select');
+    statusSelect.id = 'tiffin-status-select';
+    statusSelect.className = 'form-control';
+    
+    // Add status options
+    const statuses = [
+        { value: 'scheduled', text: 'Scheduled' },
+        { value: 'preparing', text: 'Preparing' },
+        { value: 'prepared', text: 'Prepared' },
+        { value: 'out_for_delivery', text: 'Out for Delivery' },
+        { value: 'delivered', text: 'Delivered' },
+        { value: 'cancelled', text: 'Cancelled' }
+    ];
+    
+    statuses.forEach(status => {
+        const option = document.createElement('option');
+        option.value = status.value;
+        option.textContent = status.text;
+        statusSelect.appendChild(option);
+    });
+    
+    // Create update button
+    const updateButton = document.createElement('button');
+    updateButton.textContent = 'Update Status';
+    updateButton.className = 'action-button';
+    updateButton.style.marginLeft = '10px';
+    
+    // Add event listener to the button
+    updateButton.onclick = async () => {
+        const newStatus = statusSelect.value;
+        console.log("Updating tiffin status to:", newStatus);
+        
+        try {
+            showNotification('Updating tiffin status...', 'info');
+            
+            const response = await fetch(`${API_BASE_URL}/admin/tiffins/${tiffinId}/status?status=${newStatus}`, {
+                method: 'PUT',
+                headers: {
+                    'X-API-Key': apiKey
+                }
+            });
+            
+            console.log("Status update response:", response.status);
+            
+            if (!response.ok) {
+                const error = await response.json();
+                console.error("Status update error:", error);
+                throw new Error(error.detail || 'Failed to update tiffin status');
+            }
+            
+            const result = await response.json();
+            console.log("Status update result:", result);
+            
+            showNotification('Tiffin status updated successfully', 'success');
+            
+            // Update status in modal
+            const statusElement = document.getElementById('tiffin-details-status');
+            if (statusElement) {
+                statusElement.textContent = formatTiffinStatus(newStatus);
+                statusElement.className = `status-${newStatus}`;
+            }
+            
+            // Reload appropriate page
+            if (document.getElementById('manage-tiffins-page').classList.contains('active')) {
+                loadExistingTiffins();
+            } else if (document.getElementById('tiffins-page').classList.contains('active')) {
+                loadTiffins();
+            } else if (document.getElementById('dashboard-page').classList.contains('active')) {
+                loadDashboard();
+            }
+            
+        } catch (error) {
+            console.error('Error updating tiffin status:', error);
+            showNotification('Error: ' + error.message, 'error');
+        }
+    };
+    
+    // Add elements to admin actions
+    const container = document.createElement('div');
+    container.style.display = 'flex';
+    container.style.alignItems = 'center';
+    container.appendChild(statusSelect);
+    container.appendChild(updateButton);
+    
+    adminActions.appendChild(container);
+    
+    console.log("Status update functionality fixed and implemented");
 }
 
 // Helper function to format time
@@ -881,63 +1066,85 @@ async function checkTiffinCancellable(tiffin) {
 }
 
 function setupTiffinDetailsListeners(tiffinId) {
-    // Close button
-    document.querySelector('#tiffin-details-modal .close-modal').addEventListener('click', () => {
-        document.getElementById('tiffin-details-modal').classList.remove('active');
-    });
+    // Close button (ensure it works)
+    const closeBtn = document.querySelector('#tiffin-details-modal .close-modal');
+    if (closeBtn) {
+        // Remove existing listeners
+        const newCloseBtn = closeBtn.cloneNode(true);
+        closeBtn.parentNode.replaceChild(newCloseBtn, closeBtn);
+        
+        // Add new listener
+        newCloseBtn.addEventListener('click', () => {
+            document.getElementById('tiffin-details-modal').classList.remove('active');
+        });
+    }
     
     // Cancel tiffin button (for users)
     const cancelBtn = document.getElementById('cancel-tiffin-btn');
-    cancelBtn.onclick = () => {
-        // Show confirmation dialog
-        showConfirmDialog(
-            'Cancel Tiffin',
-            'Are you sure you want to cancel this tiffin? This action cannot be undone.',
-            async () => {
-                try {
-                    const response = await fetch(`${API_BASE_URL}/user/cancel-tiffin?tiffin_id=${tiffinId}`, {
-                        method: 'POST',
-                        headers: {
-                            'X-API-Key': apiKey
+    if (cancelBtn) {
+        cancelBtn.onclick = () => {
+            // Show confirmation dialog
+            showConfirmDialog(
+                'Cancel Tiffin',
+                'Are you sure you want to cancel this tiffin? This action cannot be undone.',
+                async () => {
+                    try {
+                        const response = await fetch(`${API_BASE_URL}/user/cancel-tiffin?tiffin_id=${tiffinId}`, {
+                            method: 'POST',
+                            headers: {
+                                'X-API-Key': apiKey
+                            }
+                        });
+                        
+                        if (!response.ok) {
+                            const error = await response.json();
+                            throw new Error(error.detail || 'Failed to cancel tiffin');
                         }
-                    });
-                    
-                    if (!response.ok) {
-                        const error = await response.json();
-                        throw new Error(error.detail || 'Failed to cancel tiffin');
+                        
+                        showNotification('Tiffin cancelled successfully', 'success');
+                        document.getElementById('tiffin-details-modal').classList.remove('active');
+                        
+                        // Reload tiffins
+                        loadTiffins();
+                        loadDashboard();
+                    } catch (error) {
+                        console.error('Error cancelling tiffin:', error);
+                        showNotification(error.message, 'error');
                     }
-                    
-                    showNotification('Tiffin cancelled successfully', 'success');
-                    document.getElementById('tiffin-details-modal').classList.remove('active');
-                    
-                    // Reload tiffins
-                    loadTiffins();
-                    loadDashboard();
-                } catch (error) {
-                    console.error('Error cancelling tiffin:', error);
-                    showNotification(error.message, 'error');
                 }
-            }
-        );
-    };
+            );
+        };
+    }
     
     // Update status button (for admins)
     const updateStatusBtn = document.getElementById('update-tiffin-status-btn');
     const statusDropdown = document.getElementById('status-dropdown');
     
-    if (updateStatusBtn) {
-        updateStatusBtn.onclick = (e) => {
+    if (updateStatusBtn && statusDropdown) {
+        // Remove existing event listeners to prevent duplicates
+        const newUpdateStatusBtn = updateStatusBtn.cloneNode(true);
+        updateStatusBtn.parentNode.replaceChild(newUpdateStatusBtn, updateStatusBtn);
+        
+        // Add new event listener
+        newUpdateStatusBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             statusDropdown.classList.toggle('active');
-        };
+        });
         
-        // Status options
+        // Status options - recreate event listeners for each option
         document.querySelectorAll('.status-option').forEach(option => {
-            option.onclick = async (e) => {
+            // Remove existing event listeners
+            const newOption = option.cloneNode(true);
+            option.parentNode.replaceChild(newOption, option);
+            
+            // Add new event listener
+            newOption.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const status = e.target.dataset.status;
                 
                 try {
+                    showNotification('Updating tiffin status...', 'info');
+                    
                     const response = await fetch(`${API_BASE_URL}/admin/tiffins/${tiffinId}/status?status=${status}`, {
                         method: 'PUT',
                         headers: {
@@ -945,7 +1152,7 @@ function setupTiffinDetailsListeners(tiffinId) {
                         }
                     });
                     
-                                        if (!response.ok) {
+                    if (!response.ok) {
                         const error = await response.json();
                         throw new Error(error.detail || 'Failed to update tiffin status');
                     }
@@ -954,25 +1161,35 @@ function setupTiffinDetailsListeners(tiffinId) {
                     statusDropdown.classList.remove('active');
                     
                     // Update status in modal
-                    document.getElementById('tiffin-details-status').textContent = formatTiffinStatus(status);
-                    document.getElementById('tiffin-details-status').className = `status-badge status-${status}`;
+                    const statusElement = document.getElementById('tiffin-details-status');
+                    if (statusElement) {
+                        statusElement.textContent = formatTiffinStatus(status);
+                        statusElement.className = `status-${status}`;
+                    }
                     
                     // Reload tiffins if on manage tiffins page
                     if (document.getElementById('manage-tiffins-page').classList.contains('active')) {
                         loadManageTiffins();
+                    } else {
+                        // If on other pages with tiffins, reload those
+                        if (document.getElementById('tiffins-page').classList.contains('active')) {
+                            loadTiffins();
+                        } else if (document.getElementById('dashboard-page').classList.contains('active')) {
+                            loadDashboard();
+                        }
                     }
                 } catch (error) {
                     console.error('Error updating tiffin status:', error);
                     showNotification(error.message, 'error');
                 }
-            };
+            });
         });
         
         // Close dropdown when clicking outside
         document.addEventListener('click', (e) => {
             if (statusDropdown.classList.contains('active') && 
                 !statusDropdown.contains(e.target) && 
-                e.target !== updateStatusBtn) {
+                e.target !== newUpdateStatusBtn) {
                 statusDropdown.classList.remove('active');
             }
         });
@@ -988,7 +1205,7 @@ async function loadHistory() {
         
         console.log("History response:", response);
         
-        // The API now returns data in a paginated format
+        // The API returns data in a paginated format
         const history = response.data || [];
         console.log(`Loaded ${history.length} history items`);
         
@@ -1071,6 +1288,14 @@ function displayHistory(history, filters = {}) {
 }
 
 function updateHistoryStats(history) {
+    if (!Array.isArray(history)) {
+        console.error('History is not an array:', history);
+        document.getElementById('total-tiffins-count').textContent = '0';
+        document.getElementById('total-tiffins-spent').textContent = '₹0.00';
+        document.getElementById('most-ordered-time').textContent = 'N/A';
+        return;
+    }
+    
     // Total tiffins
     const totalTiffins = history.filter(item => item.status !== 'cancelled').length;
     document.getElementById('total-tiffins-count').textContent = totalTiffins;
@@ -1078,14 +1303,16 @@ function updateHistoryStats(history) {
     // Total spent
     const totalSpent = history
         .filter(item => item.status !== 'cancelled')
-        .reduce((sum, item) => sum + item.price, 0);
+        .reduce((sum, item) => sum + (item.price || 0), 0);
     document.getElementById('total-tiffins-spent').textContent = `₹${totalSpent.toFixed(2)}`;
     
     // Most ordered time
     const timeCounts = history
         .filter(item => item.status !== 'cancelled')
         .reduce((counts, item) => {
-            counts[item.time] = (counts[item.time] || 0) + 1;
+            if (item.time) {
+                counts[item.time] = (counts[item.time] || 0) + 1;
+            }
             return counts;
         }, {});
     
@@ -1335,7 +1562,7 @@ async function login(userId, password) {
     try {
         console.log(`Attempting login for user: ${userId}`);
         
-        const response = await fetch(`${API_BASE_URL}/auth/login?user_id=${userId}&password=${password}`);
+        const response = await fetch(`${API_BASE_URL}/auth/login?user_id=${encodeURIComponent(userId)}&password=${encodeURIComponent(password)}`);
         
         if (!response.ok) {
             const error = await response.json();
@@ -1343,6 +1570,7 @@ async function login(userId, password) {
         }
         
         const data = await response.json();
+        console.log("Login response:", data);
         
         if (data.status === 'success') {
             apiKey = data.api_key;
@@ -1623,55 +1851,28 @@ async function loadProfileStats() {
     try {
         console.log("Loading profile stats");
         
-        // For user stats, we'll use the user's history
-        const response = await fetch(`${API_BASE_URL}/user/history`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        });
-        
-        console.log("Profile stats response status:", response.status);
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Profile stats error details:", errorData);
-            throw new Error(errorData.detail || 'Failed to load user stats');
+        // For admin, we don't need to fetch stats
+        if (userRole === 'admin') {
+            document.getElementById('profile-total-tiffins').textContent = 'N/A';
+            document.getElementById('profile-most-ordered').textContent = 'N/A';
+            return;
         }
         
-        const history = await response.json();
-        console.log(`Loaded ${history.length} history items for stats`);
+        // For regular users, fetch stats from API
+        const stats = await apiRequest('/user/dashboard/stats');
+        console.log("Dashboard stats:", stats);
         
-        // Member since
-        document.getElementById('member-since').textContent = currentUser.created_at ? 
-            formatDate(currentUser.created_at) : 'N/A';
-        
-        // Total tiffins
-        const totalTiffins = history.filter(item => item.status !== 'cancelled').length;
-        document.getElementById('profile-total-tiffins').textContent = totalTiffins;
-        
-        // Most ordered time
-        const timeCounts = history
-            .filter(item => item.status !== 'cancelled')
-            .reduce((counts, item) => {
-                counts[item.time] = (counts[item.time] || 0) + 1;
-                return counts;
-            }, {});
-        
-        let mostOrderedTime = 'N/A';
-        let maxCount = 0;
-        
-        for (const [time, count] of Object.entries(timeCounts)) {
-            if (count > maxCount) {
-                mostOrderedTime = time;
-                maxCount = count;
+        if (stats) {
+            document.getElementById('profile-total-tiffins').textContent = stats.month_tiffins || '0';
+            document.getElementById('profile-most-ordered').textContent = 'N/A'; // API doesn't provide favorite time
+            
+            // Update additional stats if available
+            if (document.getElementById('month-tiffin-count')) {
+                document.getElementById('month-tiffin-count').textContent = `${stats.month_tiffins || 0} tiffins`;
             }
         }
-        
-        document.getElementById('profile-most-ordered').textContent = formatTiffinTime(mostOrderedTime);
-        
     } catch (error) {
-        console.error('Error loading profile stats:', error);
-        document.getElementById('member-since').textContent = 'Error loading data';
+        console.error('Error loading user stats:', error);
         document.getElementById('profile-total-tiffins').textContent = 'Error';
         document.getElementById('profile-most-ordered').textContent = 'Error';
     }
@@ -1712,6 +1913,9 @@ async function loadAdminDashboard() {
         
         // Load pending requests
         loadPendingRequests();
+        
+        // Setup quick action links
+        setupQuickActionLinks();
         
     } catch (error) {
         console.error('Error loading admin dashboard:', error);
@@ -2061,6 +2265,74 @@ async function loadManageTiffins() {
     
     // Load existing tiffins
     loadExistingTiffins();
+    
+    // Set up tab switching
+    setupTiffinTabs();
+    
+    // Initialize all modals in this section
+    initializeTiffinModals();
+}
+
+function initializeTiffinModals() {
+    // Create Tiffin Modal
+    document.querySelector('#create-tiffin-modal .close-modal').addEventListener('click', () => {
+        document.getElementById('create-tiffin-modal').classList.remove('active');
+    });
+    
+    // Today's date as default for tiffin creation
+    const today = new Date().toISOString().split('T')[0];
+    if (document.getElementById('tiffin-date')) {
+        document.getElementById('tiffin-date').value = today;
+    }
+    if (document.getElementById('batch-tiffin-date')) {
+        document.getElementById('batch-tiffin-date').value = today;
+    }
+    
+    // Default times
+    if (document.getElementById('tiffin-cancellation')) {
+        document.getElementById('tiffin-cancellation').value = "08:00";
+    }
+    if (document.getElementById('tiffin-delivery')) {
+        document.getElementById('tiffin-delivery').value = "12:00";
+    }
+    if (document.getElementById('batch-tiffin-cancellation')) {
+        document.getElementById('batch-tiffin-cancellation').value = "08:00";
+    }
+    if (document.getElementById('batch-tiffin-delivery')) {
+        document.getElementById('batch-tiffin-delivery').value = "12:00";
+    }
+}
+
+function setupTiffinTabs() {
+    const tiffinTabBtns = document.querySelectorAll('.tiffin-management-tabs .tab-btn');
+    tiffinTabBtns.forEach(btn => {
+        btn.addEventListener('click', function() {
+            console.log('Tiffin tab clicked:', this.getAttribute('data-tab'));
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.tiffin-management-tabs .tab-btn').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Add active class to clicked tab
+            this.classList.add('active');
+            
+            // Hide all tab panes
+            document.querySelectorAll('#manage-tiffins-page .tab-pane').forEach(pane => {
+                pane.classList.remove('active');
+            });
+            
+            // Show selected tab pane
+            const tabId = this.getAttribute('data-tab');
+            const targetPane = document.getElementById(`${tabId}-tab`);
+            if (targetPane) {
+                targetPane.classList.add('active');
+                console.log('Activating pane:', tabId);
+            } else {
+                console.error('Could not find tab pane:', tabId);
+            }
+        });
+    });
 }
 
 async function loadUsersForSelect() {
@@ -2215,6 +2487,8 @@ async function loadNoticesPolls() {
 
 async function loadAdminInvoices(filters = {}) {
     try {
+        console.log("Loading admin invoices with filters:", filters);
+        
         // Build query parameters
         const queryParams = [];
         if (filters.user_id) queryParams.push(`user_id=${filters.user_id}`);
@@ -2225,10 +2499,16 @@ async function loadAdminInvoices(filters = {}) {
         const queryString = queryParams.length > 0 ? `?${queryParams.join('&')}` : '';
         
         const invoices = await apiRequest(`/admin/invoices${queryString}`);
+        console.log("Admin invoices loaded:", invoices);
         
         const invoicesList = document.getElementById('admin-invoices-list');
         
-        if (invoices.length === 0) {
+        if (!invoicesList) {
+            console.error("Admin invoices list element not found");
+            return;
+        }
+        
+        if (!invoices || invoices.length === 0) {
             invoicesList.innerHTML = `
                 <div class="empty-state">
                     <img src="empty.svg" alt="No invoices">
@@ -2237,6 +2517,13 @@ async function loadAdminInvoices(filters = {}) {
             `;
             return;
         }
+        
+        // Sort by date (newest first)
+        invoices.sort((a, b) => {
+            const dateA = new Date(a.generated_at || a.created_at || 0);
+            const dateB = new Date(b.generated_at || b.created_at || 0);
+            return dateB - dateA;
+        });
         
         let invoicesHTML = '';
         
@@ -2267,7 +2554,7 @@ async function loadAdminInvoices(filters = {}) {
                         </div>
                         <div class="invoice-card-tiffins">
                             <div class="invoice-card-tiffins-title">Total Tiffins</div>
-                            <div class="invoice-card-tiffin-count">${invoice.tiffins.length}</div>
+                            <div class="invoice-card-tiffin-count">${invoice.tiffins ? invoice.tiffins.length : 0}</div>
                         </div>
                         <div class="invoice-card-total">
                             <span>Total Amount</span>
@@ -2296,11 +2583,14 @@ async function loadAdminInvoices(filters = {}) {
         
     } catch (error) {
         console.error('Error loading admin invoices:', error);
-        document.getElementById('admin-invoices-list').innerHTML = `
-            <div class="empty-state">
-                <p>Error loading invoices: ${error.message}</p>
-            </div>
-        `;
+        const invoicesList = document.getElementById('admin-invoices-list');
+        if (invoicesList) {
+            invoicesList.innerHTML = `
+                <div class="empty-state">
+                    <p>Error loading invoices: ${error.message}</p>
+                </div>
+            `;
+        }
     }
 }
 
@@ -2401,6 +2691,28 @@ async function loadAdminPolls() {
                 <p>Error loading polls: ${error.message}</p>
             </div>
         `;
+    }
+}
+
+async function vote_poll(pollId, optionIndex) {
+    try {
+        console.log(`Submitting vote for poll ${pollId}, option index: ${optionIndex}`);
+        
+        await apiRequest(`/user/polls/${pollId}/vote`, {
+            method: 'POST',
+            body: JSON.stringify({
+                option_index: optionIndex
+            })
+        });
+        
+        showNotification('Vote submitted successfully', 'success');
+        
+        // Reload polls
+        loadPolls();
+        
+    } catch (error) {
+        console.error('Error submitting vote:', error);
+        showNotification('Failed to submit vote: ' + error.message, 'error');
     }
 }
 
@@ -2643,9 +2955,10 @@ async function deletePoll(pollId) {
     );
 }
 
-// Generate Invoices Functions
 async function loadGenerateInvoices() {
     if (userRole !== 'admin') return;
+    
+    console.log("Loading generate invoices page");
     
     // Set default dates (current month)
     const now = new Date();
@@ -2656,32 +2969,68 @@ async function loadGenerateInvoices() {
     document.getElementById('invoice-end-date').value = lastDay;
     
     // Load existing invoices
-    loadAdminInvoices();
+    await loadAdminInvoices();
+    
+    // Set up event listener for generate button
+    const generateBtn = document.getElementById('generate-invoices-btn');
+    if (generateBtn) {
+        // Remove existing listeners
+        const newGenerateBtn = generateBtn.cloneNode(true);
+        if (generateBtn.parentNode) {
+            generateBtn.parentNode.replaceChild(newGenerateBtn, generateBtn);
+        }
+        
+        // Add new listener
+        newGenerateBtn.addEventListener('click', generateInvoices);
+    }
 }
 
 async function loadAdminInvoices(filters = {}) {
     try {
-        // This is a simplified approach since there's no direct endpoint to get all invoices
-        // In a real app, you'd have an admin/invoices endpoint
+        console.log("Loading admin invoices with filters:", filters);
         
-        // For now, we'll simulate by loading a few recent invoices
+        // Show loading state
         const invoicesList = document.getElementById('admin-invoices-list');
+        if (invoicesList) {
+            invoicesList.innerHTML = `
+                <div class="loading-state">
+                    <span class="spinner"></span>
+                    <p>Loading invoices...</p>
+                </div>
+            `;
+        }
         
-        // Example data - in a real app this would come from the API
-        const invoices = [
-            {
-                _id: '62a1b3c4d5e6f7g8h9i0j1k2',
-                user_id: 'test123',
-                start_date: '2023-05-01',
-                end_date: '2023-05-31',
-                tiffins: Array(12).fill('tiffin'),
-                total_amount: 1800.00,
-                paid: false,
-                generated_at: '2023-06-01T10:00:00.000Z'
+        // Build query parameters
+        const queryParams = [];
+        if (filters.user_id) queryParams.push(`user_id=${encodeURIComponent(filters.user_id)}`);
+        if (filters.paid !== undefined) queryParams.push(`paid=${filters.paid}`);
+        if (filters.start_date) queryParams.push(`start_date=${encodeURIComponent(filters.start_date)}`);
+        if (filters.end_date) queryParams.push(`end_date=${encodeURIComponent(filters.end_date)}`);
+        
+        const queryString = queryParams.length > 0 ? `?${queryParams.join('&')}` : '';
+        
+        // Make the actual API request
+        const response = await fetch(`${API_BASE_URL}/admin/invoices${queryString}`, {
+            method: 'GET',
+            headers: {
+                'X-API-Key': apiKey
             }
-        ];
+        });
         
-        if (invoices.length === 0) {
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Failed to load invoices');
+        }
+        
+        const invoices = await response.json();
+        console.log("Admin invoices loaded:", invoices);
+        
+        if (!invoicesList) {
+            console.error("Admin invoices list element not found");
+            return;
+        }
+        
+        if (!invoices || invoices.length === 0) {
             invoicesList.innerHTML = `
                 <div class="empty-state">
                     <img src="empty.svg" alt="No invoices">
@@ -2691,11 +3040,19 @@ async function loadAdminInvoices(filters = {}) {
             return;
         }
         
+        // Sort by date (newest first)
+        invoices.sort((a, b) => {
+            const dateA = new Date(a.generated_at || a.created_at || 0);
+            const dateB = new Date(b.generated_at || b.created_at || 0);
+            return dateB - dateA;
+        });
+        
         let invoicesHTML = '';
         
         invoices.forEach(invoice => {
             const statusClass = invoice.paid ? 'paid' : 'unpaid';
             const statusText = invoice.paid ? 'Paid' : 'Unpaid';
+            const userName = invoice.user_details ? invoice.user_details.name : invoice.user_id;
             
             invoicesHTML += `
                 <div class="invoice-card" data-invoice-id="${invoice._id}">
@@ -2705,7 +3062,7 @@ async function loadAdminInvoices(filters = {}) {
                     </div>
                     <div class="invoice-card-body">
                         <div class="invoice-card-user">
-                            <strong>User ID:</strong> ${invoice.user_id}
+                            <strong>User:</strong> ${userName}
                         </div>
                         <div class="invoice-card-dates">
                             <div class="invoice-card-date">
@@ -2719,7 +3076,7 @@ async function loadAdminInvoices(filters = {}) {
                         </div>
                         <div class="invoice-card-tiffins">
                             <div class="invoice-card-tiffins-title">Total Tiffins</div>
-                            <div class="invoice-card-tiffin-count">${invoice.tiffins.length}</div>
+                            <div class="invoice-card-tiffin-count">${invoice.tiffins ? invoice.tiffins.length : 0}</div>
                         </div>
                         <div class="invoice-card-total">
                             <span>Total Amount</span>
@@ -2748,7 +3105,14 @@ async function loadAdminInvoices(filters = {}) {
         
     } catch (error) {
         console.error('Error loading admin invoices:', error);
-        showNotification('Failed to load invoices', 'error');
+        const invoicesList = document.getElementById('admin-invoices-list');
+        if (invoicesList) {
+            invoicesList.innerHTML = `
+                <div class="empty-state">
+                    <p>Error loading invoices: ${error.message}</p>
+                </div>
+            `;
+        }
     }
 }
 
@@ -2769,31 +3133,72 @@ async function generateInvoices() {
         
         showNotification('Generating invoices...', 'info');
         
-        // The API expects start_date and end_date as query parameters
-        const result = await apiRequest(`/admin/generate-invoices?start_date=${startDate}&end_date=${endDate}`, {
-            method: 'POST'
+        // Show loading state
+        const generateBtn = document.getElementById('generate-invoices-btn');
+        if (generateBtn) {
+            generateBtn.disabled = true;
+            generateBtn.innerHTML = '<span class="spinner"></span> Generating...';
+        }
+        
+        // Make direct fetch call to ensure we're not using any cached data
+        const response = await fetch(`${API_BASE_URL}/admin/generate-invoices?start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`, {
+            method: 'POST',
+            headers: {
+                'X-API-Key': apiKey
+            }
         });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Failed to generate invoices');
+        }
+        
+        const result = await response.json();
+        console.log("Invoice generation result:", result);
         
         showNotification(`Successfully generated ${result.generated_invoices} invoices`, 'success');
         
-        // Reload invoices
-        loadAdminInvoices();
+        // Reset button state
+        if (generateBtn) {
+            generateBtn.disabled = false;
+            generateBtn.textContent = 'Generate Invoices';
+        }
+        
+        // Reload invoices after a short delay to ensure they're available in the API
+        setTimeout(() => {
+            loadAdminInvoices();
+        }, 1500); // Slightly longer delay
         
     } catch (error) {
         console.error('Error generating invoices:', error);
         showNotification('Failed to generate invoices: ' + error.message, 'error');
+        
+        // Reset button state
+        const generateBtn = document.getElementById('generate-invoices-btn');
+        if (generateBtn) {
+            generateBtn.disabled = false;
+            generateBtn.textContent = 'Generate Invoices';
+        }
     }
 }
-
 async function markInvoicePaid(invoiceId) {
+    if (!invoiceId) {
+        showNotification('Invalid invoice ID', 'error');
+        return;
+    }
+    
     showConfirmDialog(
         'Mark Invoice as Paid',
         'Are you sure you want to mark this invoice as paid?',
         async () => {
             try {
-                await apiRequest(`/admin/invoices/${invoiceId}/mark-paid`, {
+                console.log(`Marking invoice as paid: ${invoiceId}`);
+                
+                const result = await apiRequest(`/admin/invoices/${invoiceId}/mark-paid`, {
                     method: 'PUT'
                 });
+                
+                console.log("Mark as paid result:", result);
                 
                 showNotification('Invoice marked as paid successfully', 'success');
                 
@@ -2807,7 +3212,6 @@ async function markInvoicePaid(invoiceId) {
         }
     );
 }
-
 // Helper Functions
 function getInitials(name) {
     if (!name) return '';
@@ -3038,6 +3442,7 @@ function setupEventListeners() {
         document.getElementById('notices-tab').classList.add('active');
     });
     
+    
     document.querySelector('#notices-polls-tabs .tab-btn[data-tab="polls"]').addEventListener('click', function() {
         document.querySelectorAll('#notices-polls-tabs .tab-btn').forEach(tab => {
             tab.classList.remove('active');
@@ -3081,7 +3486,7 @@ function setupEventListeners() {
             }
         });
     });
-    // Login form
+    // Login form with loading indicator
     document.getElementById('login-btn').addEventListener('click', async () => {
         const userId = document.getElementById('login-userid').value.trim();
         const password = document.getElementById('login-password').value;
@@ -3091,9 +3496,19 @@ function setupEventListeners() {
             return;
         }
         
-        const success = await login(userId, password);
-        if (!success) {
-            document.getElementById('login-message').textContent = 'Invalid credentials. Please try again.';
+        // Show loading indicator
+        document.getElementById('login-btn').innerHTML = '<span class="spinner"></span> Logging in...';
+        document.getElementById('login-btn').disabled = true;
+        
+        try {
+            const success = await login(userId, password);
+            if (!success) {
+                document.getElementById('login-message').textContent = 'Invalid credentials. Please try again.';
+            }
+        } finally {
+            // Reset button regardless of outcome
+            document.getElementById('login-btn').innerHTML = 'Login';
+            document.getElementById('login-btn').disabled = false;
         }
     });
     
@@ -3302,10 +3717,8 @@ function setupEventListeners() {
     // Create tiffin
     document.getElementById('create-tiffin-btn').addEventListener('click', createTiffin);
     
-    // Add user group
+    // Add this to your setupEventListeners function
     document.getElementById('add-user-group').addEventListener('click', addUserGroup);
-    
-    // Batch create tiffins
     document.getElementById('batch-create-btn').addEventListener('click', batchCreateTiffins);
     
     // Notifications dropdown
@@ -3333,8 +3746,55 @@ function setupEventListeners() {
         document.getElementById('notification-count').textContent = '0';
         activeNotifications = [];
     });
+    document.querySelectorAll('.quick-action-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+            e.preventDefault();
+            const pageId = card.getAttribute('data-page');
+            if (pageId) {
+                navigateTo(pageId);
+            }
+        });
+    });
 }
 
+// Fix for modal close buttons
+function setupModalCloseHandlers() {
+    // Get all modals and attach proper close handlers
+    document.querySelectorAll('.modal .close-modal').forEach(closeBtn => {
+        // Remove existing listeners to prevent duplicates
+        const newCloseBtn = closeBtn.cloneNode(true);
+        closeBtn.parentNode.replaceChild(newCloseBtn, closeBtn);
+        
+        // Add new close handler
+        newCloseBtn.addEventListener('click', () => {
+            const modal = newCloseBtn.closest('.modal');
+            if (modal) {
+                modal.classList.remove('active');
+            }
+        });
+    });
+    
+    // Special handling for tiffin details modal
+    const tiffinModal = document.getElementById('tiffin-details-modal');
+    if (tiffinModal) {
+        const closeBtn = tiffinModal.querySelector('.close-modal');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => {
+                tiffinModal.classList.remove('active');
+            });
+        }
+    }
+}
+
+// Add a global event listener for dynamically created modals
+document.addEventListener('click', (e) => {
+    if (e.target.classList.contains('close-modal')) {
+        const modal = e.target.closest('.modal');
+        if (modal) {
+            modal.classList.remove('active');
+        }
+    }
+});
 
 async function showVotePollModal(pollId) {
     try {
@@ -3342,6 +3802,7 @@ async function showVotePollModal(pollId) {
         
         // Fetch poll details
         const poll = await apiRequest(`/user/polls/${pollId}`);
+        console.log("Poll details for voting:", poll);
         
         // Create a modal dynamically
         const modal = document.createElement('div');
@@ -3391,11 +3852,12 @@ async function showVotePollModal(pollId) {
             }
             
             try {
-                await apiRequest(`/user/polls/${pollId}/vote`, {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        option_index: parseInt(selectedOption.value)
-                    })
+                const optionIndex = parseInt(selectedOption.value);
+                console.log(`Submitting vote for poll ${pollId}, option index: ${optionIndex}`);
+                
+                // Use query parameter instead of request body
+                await apiRequest(`/user/polls/${pollId}/vote?option_index=${optionIndex}`, {
+                    method: 'POST'
                 });
                 
                 showNotification('Vote submitted successfully', 'success');
@@ -3406,16 +3868,15 @@ async function showVotePollModal(pollId) {
                 
             } catch (error) {
                 console.error('Error submitting vote:', error);
-                showNotification(error.message, 'error');
+                showNotification('Failed to submit vote: ' + error.message, 'error');
             }
         });
         
     } catch (error) {
         console.error('Error showing vote poll modal:', error);
-        showNotification(error.message, 'error');
+        showNotification('Failed to load poll details: ' + error.message, 'error');
     }
 }
-
 async function showApproveRequestModal(requestId) {
     try {
         console.log(`Loading request details for approval: ${requestId}`);
@@ -3652,7 +4113,7 @@ async function createPoll() {
             return;
         }
         
-        // Get all option inputs within the container
+        // Get all option inputs
         const optionInputs = document.querySelectorAll('#poll-options-container .poll-option');
         
         if (!optionInputs || optionInputs.length < 2) {
@@ -3661,13 +4122,16 @@ async function createPoll() {
         }
         
         const options = [];
-        for (const optionInput of optionInputs) {
-            const optionText = optionInput.value.trim();
-            if (optionText) {
-                options.push({
-                    option: optionText,
-                    votes: 0
-                });
+        for (let i = 0; i < optionInputs.length; i++) {
+            const input = optionInputs[i];
+            if (input && input.value) {
+                const optionText = input.value.trim();
+                if (optionText) {
+                    options.push({
+                        option: optionText,
+                        votes: 0
+                    });
+                }
             }
         }
         
@@ -3684,41 +4148,45 @@ async function createPoll() {
             return;
         }
         
-        // Convert to ISO format with time
-        const formattedStartDate = new Date(startDate).toISOString();
-        const formattedEndDate = new Date(endDate);
-        // Set end date to end of day (23:59:59) if it doesn't include time
-        if (endDate.length <= 10) {
-            formattedEndDate.setHours(23, 59, 59, 999);
-        }
+        // Format dates properly with timezone
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
         
         const pollData = {
-            question,
-            options,
-            start_date: formattedStartDate,
-            end_date: formattedEndDate.toISOString(),
+            question: question,
+            options: options,
+            start_date: start.toISOString(),
+            end_date: end.toISOString(),
             active: true
         };
         
-        await apiRequest('/admin/polls', {
+        console.log("Creating poll with data:", pollData);
+        
+        const result = await apiRequest('/admin/polls', {
             method: 'POST',
             body: JSON.stringify(pollData)
         });
         
-        showNotification('Poll created successfully', 'success');
+        console.log("Poll creation result:", result);
         
-        // Clear the form
+        showNotification('Poll created successfully', 'success');
+        document.getElementById('create-poll-modal').classList.remove('active');
+        
+        // Clear form
         document.getElementById('poll-question').value = '';
-        document.getElementById('poll-options-container').innerHTML = '';
         document.getElementById('poll-start-date').value = '';
         document.getElementById('poll-end-date').value = '';
         
-        // Add default empty options
-        addPollOption();
-        addPollOption();
-        
-        // Close the modal
-        document.getElementById('create-poll-modal').classList.remove('active');
+        // Clear options and add default ones
+        const optionsContainer = document.getElementById('poll-options-container');
+        if (optionsContainer) {
+            optionsContainer.innerHTML = '';
+            addPollOption();
+            addPollOption();
+        }
         
         // Reload admin polls
         loadAdminPolls();
@@ -3737,28 +4205,48 @@ function addPollOption() {
         return;
     }
     
-    const optionCount = optionsContainer.querySelectorAll('.poll-option').length;
+    const optionCount = optionsContainer.querySelectorAll('.poll-option-item').length + 1;
     
     const optionDiv = document.createElement('div');
     optionDiv.className = 'poll-option-item';
     
     optionDiv.innerHTML = `
-        <input type="text" class="poll-option" placeholder="Option ${optionCount + 1}">
+        <input type="text" class="poll-option form-control" placeholder="Option ${optionCount}">
         <button type="button" class="remove-option-btn">✕</button>
     `;
     
     optionsContainer.appendChild(optionDiv);
     
     // Add event listener to remove button
-    optionDiv.querySelector('.remove-option-btn').addEventListener('click', function() {
-        optionsContainer.removeChild(optionDiv);
-    });
+    const removeBtn = optionDiv.querySelector('.remove-option-btn');
+    if (removeBtn) {
+        removeBtn.addEventListener('click', function() {
+            optionsContainer.removeChild(optionDiv);
+        });
+    }
     
     // Focus the new input
-    optionDiv.querySelector('input').focus();
+    const newInput = optionDiv.querySelector('.poll-option');
+    if (newInput) {
+        newInput.focus();
+    }
 }
-
-// Setup function for poll creation modal
+function setupQuickActionLinks() {
+    document.querySelectorAll('.quick-action-card').forEach(card => {
+        // Remove existing event listeners to prevent duplicates
+        const newCard = card.cloneNode(true);
+        card.parentNode.replaceChild(newCard, card);
+        
+        // Add new event listener
+        newCard.addEventListener('click', (e) => {
+            e.preventDefault();
+            const pageId = newCard.getAttribute('data-page');
+            if (pageId) {
+                navigateTo(pageId);
+            }
+        });
+    });
+}
 function setupPollCreationModal() {
     // Clear existing options
     const optionsContainer = document.getElementById('poll-options-container');
@@ -3770,12 +4258,30 @@ function setupPollCreationModal() {
         addPollOption();
     }
     
+    // Set default dates
+    const today = new Date();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    const startDateInput = document.getElementById('poll-start-date');
+    const endDateInput = document.getElementById('poll-end-date');
+    
+    if (startDateInput) {
+        startDateInput.value = today.toISOString().split('T')[0];
+    }
+    
+    if (endDateInput) {
+        endDateInput.value = tomorrow.toISOString().split('T')[0];
+    }
+    
     // Add event listener to add option button
     const addOptionBtn = document.getElementById('add-poll-option');
     if (addOptionBtn) {
         // Remove existing event listeners to prevent duplicates
         const newAddOptionBtn = addOptionBtn.cloneNode(true);
-        addOptionBtn.parentNode.replaceChild(newAddOptionBtn, addOptionBtn);
+        if (addOptionBtn.parentNode) {
+            addOptionBtn.parentNode.replaceChild(newAddOptionBtn, addOptionBtn);
+        }
         
         newAddOptionBtn.addEventListener('click', addPollOption);
     }
@@ -3785,7 +4291,9 @@ function setupPollCreationModal() {
     if (submitPollBtn) {
         // Remove existing event listeners to prevent duplicates
         const newSubmitPollBtn = submitPollBtn.cloneNode(true);
-        submitPollBtn.parentNode.replaceChild(newSubmitPollBtn, submitPollBtn);
+        if (submitPollBtn.parentNode) {
+            submitPollBtn.parentNode.replaceChild(newSubmitPollBtn, submitPollBtn);
+        }
         
         newSubmitPollBtn.addEventListener('click', createPoll);
     }
@@ -3860,29 +4368,24 @@ async function submitTiffinRequest() {
             return;
         }
         
-        const request = {
+        console.log("Submitting tiffin request with data:", {
             description,
             preferred_date: preferredDate,
-            preferred_time: preferredTime
-        };
-        
-        if (specialInstructions) {
-            request.special_instructions = specialInstructions;
-        }
-        
-        const response = await fetch(`${API_BASE_URL}/user/request-tiffin`, {
-            method: 'POST',
-            headers: {
-                'X-API-Key': apiKey,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(request)
+            preferred_time: preferredTime,
+            special_instructions: specialInstructions || null
         });
         
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to submit request');
-        }
+        const result = await apiRequest('/user/request-tiffin', {
+            method: 'POST',
+            body: JSON.stringify({
+                description: description,
+                preferred_date: preferredDate,
+                preferred_time: preferredTime,
+                special_instructions: specialInstructions || null
+            })
+        });
+        
+        console.log("Tiffin request result:", result);
         
         showNotification('Request submitted successfully', 'success');
         document.getElementById('request-tiffin-modal').classList.remove('active');
@@ -3895,7 +4398,7 @@ async function submitTiffinRequest() {
         
     } catch (error) {
         console.error('Error submitting tiffin request:', error);
-        showNotification(error.message, 'error');
+        showNotification('Failed to submit request: ' + error.message, 'error');
     }
 }
 
@@ -4003,60 +4506,7 @@ async function createTiffin() {
 }
 
 
-function addUserGroup() {
-    const container = document.getElementById('user-groups-container');
-    const groupCount = container.querySelectorAll('.user-group').length + 1;
-    
-    const groupDiv = document.createElement('div');
-    groupDiv.className = 'user-group';
-    groupDiv.innerHTML = `
-        <h4>Group ${groupCount}</h4>
-        <div class="user-group-select">
-            <select class="user-group-select-input" multiple>
-                <!-- Users will be loaded here -->
-            </select>
-        </div>
-        <button type="button" class="secondary-button remove-group-btn">Remove Group</button>
-    `;
-    
-    container.insertBefore(groupDiv, document.getElementById('add-user-group'));
-    
-    // Add event listener to remove button
-    groupDiv.querySelector('.remove-group-btn').addEventListener('click', () => {
-        container.removeChild(groupDiv);
-        
-                // Update group numbers
-        container.querySelectorAll('.user-group').forEach((group, index) => {
-            group.querySelector('h4').textContent = `Group ${index + 1}`;
-        });
-    });
-    
-    // Populate user select
-    const select = groupDiv.querySelector('.user-group-select-input');
-    
-    fetch(`${API_BASE_URL}/admin/users`, {
-        headers: {
-            'X-API-Key': apiKey
-        }
-    })
-    .then(response => response.json())
-    .then(users => {
-        // Filter active users and sort by name
-        const activeUsers = users
-            .filter(user => user.active)
-            .sort((a, b) => a.name.localeCompare(b.name));
-        
-        activeUsers.forEach(user => {
-            const option = document.createElement('option');
-            option.value = user.user_id;
-            option.textContent = `${user.name} (${user.user_id})`;
-            select.appendChild(option);
-        });
-    })
-    .catch(error => {
-        console.error('Error loading users for group:', error);
-    });
-}
+
 
 function updateUserInfo() {
     if (!currentUser) {
@@ -4190,19 +4640,32 @@ async function batchCreateTiffins() {
             status: "scheduled"
         };
         
-        await apiRequest('/admin/batch-tiffins', {
+        // Show loading state
+        const batchCreateBtn = document.getElementById('batch-create-btn');
+        batchCreateBtn.disabled = true;
+        batchCreateBtn.innerHTML = '<span class="spinner"></span> Creating...';
+        
+        // Make the API request
+        const response = await fetch(`${API_BASE_URL}/admin/batch-tiffins`, {
             method: 'POST',
+            headers: {
+                'X-API-Key': apiKey,
+                'Content-Type': 'application/json'
+            },
             body: JSON.stringify({
-                date,
-                time,
                 base_tiffin: baseTiffin,
                 user_groups: userGroups
             })
         });
         
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Failed to create batch tiffins');
+        }
+        
         showNotification('Batch tiffins created successfully', 'success');
         
-        // Clear form
+        // Reset form and UI elements
         document.getElementById('batch-tiffin-date').value = '';
         document.getElementById('batch-tiffin-time').value = '';
         document.getElementById('batch-tiffin-description').value = '';
@@ -4212,7 +4675,32 @@ async function batchCreateTiffins() {
         document.getElementById('batch-menu-items-list').innerHTML = '';
         
         // Reset user groups
-        document.getElementById('user-groups-container').innerHTML = `
+        resetUserGroups();
+        
+        // Switch to manage tab
+        document.querySelector('.tab-btn[data-tab="manage-tiffin"]').click();
+        
+        // Reload tiffins
+        loadExistingTiffins();
+        
+    } catch (error) {
+        console.error('Error creating batch tiffins:', error);
+        showNotification(error.message, 'error');
+    } finally {
+        // Reset button state
+        const batchCreateBtn = document.getElementById('batch-create-btn');
+        if (batchCreateBtn) {
+            batchCreateBtn.disabled = false;
+            batchCreateBtn.textContent = 'Create Batch Tiffins';
+        }
+    }
+}
+
+// Helper function to reset user groups
+function resetUserGroups() {
+    const container = document.getElementById('user-groups-container');
+    if (container) {
+        container.innerHTML = `
             <div class="user-group">
                 <h4>Group 1</h4>
                 <div class="user-group-select">
@@ -4234,16 +4722,94 @@ async function batchCreateTiffins() {
         loadUsersForSelect();
         
         // Setup event listener for add group button
-        document.getElementById('add-user-group').addEventListener('click', addUserGroup);
-        
-        // Switch to manage tab
-        document.querySelector('.tab-btn[data-tab="manage-tiffin"]').click();
-        
-        // Reload tiffins
-        loadExistingTiffins();
-        
-    } catch (error) {
-        console.error('Error creating batch tiffins:', error);
-        showNotification(error.message, 'error');
+        const addGroupBtn = document.getElementById('add-user-group');
+        if (addGroupBtn) {
+            addGroupBtn.addEventListener('click', addUserGroup);
+        }
     }
+}
+
+function addUserGroup() {
+    const container = document.getElementById('user-groups-container');
+    if (!container) {
+        console.error('User groups container not found');
+        return;
+    }
+    
+    const addGroupBtn = document.getElementById('add-user-group');
+    if (!addGroupBtn) {
+        console.error('Add group button not found');
+        return;
+    }
+    
+    const groupCount = container.querySelectorAll('.user-group').length + 1;
+    
+    const groupDiv = document.createElement('div');
+    groupDiv.className = 'user-group';
+    groupDiv.innerHTML = `
+        <h4>Group ${groupCount}</h4>
+        <div class="user-group-select">
+            <select class="user-group-select-input" multiple>
+                <!-- Users will be loaded here -->
+            </select>
+        </div>
+        <button type="button" class="secondary-button remove-group-btn">Remove Group</button>
+    `;
+    
+    // Insert before the "Add Another Group" button
+    container.insertBefore(groupDiv, addGroupBtn);
+    
+    // Add event listener to remove button
+    const removeBtn = groupDiv.querySelector('.remove-group-btn');
+    if (removeBtn) {
+        removeBtn.addEventListener('click', () => {
+            container.removeChild(groupDiv);
+            
+            // Update group numbers
+            container.querySelectorAll('.user-group').forEach((group, index) => {
+                const groupHeading = group.querySelector('h4');
+                if (groupHeading) {
+                    groupHeading.textContent = `Group ${index + 1}`;
+                }
+            });
+        });
+    }
+    
+    // Populate user select
+    const select = groupDiv.querySelector('.user-group-select-input');
+    if (!select) {
+        console.error('User group select not found in new group');
+        return;
+    }
+    
+    // Fetch users for this select
+    fetch(`${API_BASE_URL}/admin/users`, {
+        headers: {
+            'X-API-Key': apiKey
+        }
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`Failed to fetch users: ${response.status}`);
+        }
+        return response.json();
+    })
+    .then(users => {
+        // Filter active users and sort by name
+        const activeUsers = users
+            .filter(user => user.active)
+            .sort((a, b) => a.name.localeCompare(b.name));
+        
+        // Populate select with users
+        activeUsers.forEach(user => {
+            const option = document.createElement('option');
+            option.value = user.user_id;
+            option.textContent = `${user.name} (${user.user_id})`;
+            select.appendChild(option);
+        });
+    })
+    .catch(error => {
+        console.error('Error loading users for group:', error);
+        showNotification('Failed to load users for group', 'error');
+    });
 }
