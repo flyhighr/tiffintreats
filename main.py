@@ -1,8 +1,7 @@
-from fastapi import FastAPI, HTTPException, Depends, Security, BackgroundTasks, Query, Request, Header
+from fastapi import FastAPI, HTTPException, Depends, Security, BackgroundTasks, Query
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from pydantic import BaseModel, Field, EmailStr, validator
+from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime, timedelta
 from pymongo import MongoClient, ASCENDING
@@ -18,27 +17,6 @@ import httpx
 import json
 import secrets
 import hashlib
-import bcrypt
-import jwt
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-from starlette.middleware.sessions import SessionMiddleware
-from starlette.status import HTTP_429_TOO_MANY_REQUESTS
-from starlette.responses import JSONResponse
-import logging
-from logging.handlers import RotatingFileHandler
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        RotatingFileHandler('app.log', maxBytes=10485760, backupCount=5),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger("tiffintreats")
 
 # Load environment variables
 load_dotenv()
@@ -46,33 +24,13 @@ load_dotenv()
 # Initialize FastAPI
 app = FastAPI(title="TiffinTreats API")
 
-# Rate limiting
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-# Session configuration - 7 days expiration
-SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY", secrets.token_urlsafe(32))
-app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET_KEY, max_age=7 * 24 * 60 * 60)  # 7 days in seconds
-
-# JWT configuration
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", secrets.token_urlsafe(32))
-JWT_ALGORITHM = "HS256"
-JWT_ACCESS_TOKEN_EXPIRE_MINUTES = 30  # 30 minutes
-JWT_REFRESH_TOKEN_EXPIRE_DAYS = 7     # 7 days
-
-# CORS Configuration - Restricted to specific origin
+# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://tiffintreats.tech"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*", "X-API-Key"],
-)
-
-# Trusted Host Configuration
-app.add_middleware(
-    TrustedHostMiddleware, allowed_hosts=["tiffintreats.tech", "tiffintreats-20mb.onrender.com"]
 )
 
 # MongoDB Connection
@@ -112,39 +70,15 @@ class PollVoteOption(BaseModel):
     option: str
     user_id: str
 
-# Base Models with improved validation
+# Base Models
 class UserBase(BaseModel):
     user_id: str
     name: str
     email: EmailStr
     address: str
-    
-    @validator('user_id')
-    def validate_user_id(cls, v):
-        if len(v) < 3 or len(v) > 30:
-            raise ValueError('User ID must be between 3 and 30 characters')
-        if not v.isalnum() and not '_' in v:
-            raise ValueError('User ID must contain only alphanumeric characters and underscores')
-        return v
-    
-    @validator('name')
-    def validate_name(cls, v):
-        if len(v) < 2 or len(v) > 100:
-            raise ValueError('Name must be between 2 and 100 characters')
-        return v
 
 class UserCreate(UserBase):
     password: str
-    
-    @validator('password')
-    def validate_password(cls, v):
-        if len(v) < 8:
-            raise ValueError('Password must be at least 8 characters')
-        if not any(c.isdigit() for c in v):
-            raise ValueError('Password must contain at least one number')
-        if not any(c.isalpha() for c in v):
-            raise ValueError('Password must contain at least one letter')
-        return v
 
 class User(UserBase):
     active: bool = True
@@ -152,11 +86,6 @@ class User(UserBase):
     
     class Config:
         from_attributes = True
-
-class TokenData(BaseModel):
-    user_id: str
-    is_admin: bool
-    exp: datetime
 
 class TiffinBase(BaseModel):
     date: str
@@ -166,30 +95,6 @@ class TiffinBase(BaseModel):
     cancellation_time: str
     delivery_time: Optional[str] = None
     status: TiffinStatus = TiffinStatus.SCHEDULED
-    
-    @validator('date')
-    def validate_date(cls, v):
-        try:
-            datetime.strptime(v, "%Y-%m-%d")
-        except ValueError:
-            raise ValueError("Invalid date format. Use YYYY-MM-DD")
-        return v
-    
-    @validator('price')
-    def validate_price(cls, v):
-        if v < 0:
-            raise ValueError("Price cannot be negative")
-        return v
-    
-    @validator('cancellation_time', 'delivery_time')
-    def validate_time(cls, v):
-        if v is None:
-            return v
-        try:
-            datetime.strptime(v, "%H:%M")
-        except ValueError:
-            raise ValueError("Invalid time format. Use HH:MM")
-        return v
 
 class TiffinCreate(TiffinBase):
     assigned_users: List[str]
@@ -210,22 +115,6 @@ class TiffinUpdate(BaseModel):
     status: Optional[TiffinStatus] = None
     menu_items: Optional[List[str]] = None
     assigned_users: Optional[List[str]] = None
-    
-    @validator('price')
-    def validate_price(cls, v):
-        if v is not None and v < 0:
-            raise ValueError("Price cannot be negative")
-        return v
-    
-    @validator('cancellation_time', 'delivery_time')
-    def validate_time(cls, v):
-        if v is None:
-            return v
-        try:
-            datetime.strptime(v, "%H:%M")
-        except ValueError:
-            raise ValueError("Invalid time format. Use HH:MM")
-        return v
 
 class Notice(BaseModel):
     title: str
@@ -233,34 +122,10 @@ class Notice(BaseModel):
     priority: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(IST))
     expires_at: Optional[datetime] = None
-    
-    @validator('title')
-    def validate_title(cls, v):
-        if len(v) < 3 or len(v) > 200:
-            raise ValueError('Title must be between 3 and 200 characters')
-        return v
-    
-    @validator('priority')
-    def validate_priority(cls, v):
-        if v not in [0, 1, 2]:
-            raise ValueError('Priority must be 0 (Normal), 1 (Important), or 2 (Urgent)')
-        return v
 
 class PollOption(BaseModel):
     option: str
     votes: int = 0
-    
-    @validator('option')
-    def validate_option(cls, v):
-        if len(v) < 1 or len(v) > 200:
-            raise ValueError('Option must be between 1 and 200 characters')
-        return v
-    
-    @validator('votes')
-    def validate_votes(cls, v):
-        if v < 0:
-            raise ValueError('Votes cannot be negative')
-        return v
 
 class Poll(BaseModel):
     question: str
@@ -268,24 +133,6 @@ class Poll(BaseModel):
     start_date: datetime
     end_date: datetime
     active: bool = True
-    
-    @validator('question')
-    def validate_question(cls, v):
-        if len(v) < 5 or len(v) > 300:
-            raise ValueError('Question must be between 5 and 300 characters')
-        return v
-    
-    @validator('options')
-    def validate_options(cls, v):
-        if len(v) < 2:
-            raise ValueError('Poll must have at least 2 options')
-        return v
-    
-    @validator('end_date')
-    def validate_end_date(cls, v, values):
-        if 'start_date' in values and v <= values['start_date']:
-            raise ValueError('End date must be after start date')
-        return v
 
 class TiffinRequest(BaseModel):
     user_id: str
@@ -295,25 +142,6 @@ class TiffinRequest(BaseModel):
     special_instructions: Optional[str] = None
     status: RequestStatus = RequestStatus.PENDING
     created_at: datetime = Field(default_factory=lambda: datetime.now(IST))
-    
-    @validator('description')
-    def validate_description(cls, v):
-        if len(v) < 5 or len(v) > 500:
-            raise ValueError('Description must be between 5 and 500 characters')
-        return v
-    
-    @validator('preferred_date')
-    def validate_date(cls, v):
-        try:
-            date = datetime.strptime(v, "%Y-%m-%d").date()
-            today = datetime.now(IST).date()
-            if date < today:
-                raise ValueError('Preferred date cannot be in the past')
-        except ValueError as e:
-            if "does not match format" in str(e):
-                raise ValueError("Invalid date format. Use YYYY-MM-DD")
-            raise
-        return v
 
 class TiffinRequestApproval(BaseModel):
     date: str
@@ -322,30 +150,6 @@ class TiffinRequestApproval(BaseModel):
     delivery_time: Optional[str] = None 
     cancellation_time: str
     menu_items: Optional[List[str]] = None
-    
-    @validator('date')
-    def validate_date(cls, v):
-        try:
-            datetime.strptime(v, "%Y-%m-%d")
-        except ValueError:
-            raise ValueError("Invalid date format. Use YYYY-MM-DD")
-        return v
-    
-    @validator('price')
-    def validate_price(cls, v):
-        if v < 0:
-            raise ValueError("Price cannot be negative")
-        return v
-    
-    @validator('cancellation_time', 'delivery_time')
-    def validate_time(cls, v):
-        if v is None:
-            return v
-        try:
-            datetime.strptime(v, "%H:%M")
-        except ValueError:
-            raise ValueError("Invalid time format. Use HH:MM")
-        return v
 
 class Invoice(BaseModel):
     user_id: str
@@ -355,26 +159,6 @@ class Invoice(BaseModel):
     total_amount: float
     paid: bool = False
     generated_at: datetime = Field(default_factory=lambda: datetime.now(IST))
-    
-    @validator('start_date', 'end_date')
-    def validate_date(cls, v):
-        try:
-            datetime.strptime(v, "%Y-%m-%d")
-        except ValueError:
-            raise ValueError("Invalid date format. Use YYYY-MM-DD")
-        return v
-    
-    @validator('end_date')
-    def validate_end_date(cls, v, values):
-        if 'start_date' in values and v < values['start_date']:
-            raise ValueError('End date must be after or equal to start date')
-        return v
-    
-    @validator('total_amount')
-    def validate_amount(cls, v):
-        if v < 0:
-            raise ValueError("Total amount cannot be negative")
-        return v
 
 class Notification(BaseModel):
     user_id: str
@@ -383,13 +167,6 @@ class Notification(BaseModel):
     type: str  # "info", "warning", "error", "success"
     read: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(IST))
-    
-    @validator('type')
-    def validate_type(cls, v):
-        valid_types = ["info", "warning", "error", "success"]
-        if v not in valid_types:
-            raise ValueError(f"Type must be one of: {', '.join(valid_types)}")
-        return v
 
 class UserStats(BaseModel):
     total_tiffins: int
@@ -416,118 +193,22 @@ class PyObjectId(ObjectId):
     def __modify_schema__(cls, field_schema):
         field_schema.update(type="string")
 
-# Enhanced Authentication Functions
-def hash_password(password: str) -> str:
-    """Hash password using bcrypt"""
-    salt = bcrypt.gensalt()
-    hashed = bcrypt.hashpw(password.encode(), salt)
-    return hashed.decode()
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify password using bcrypt"""
-    # Handle transition from old SHA-256 hashes
-    if len(hashed_password) == 64:  # SHA-256 hash length
-        # This is an old hash
-        return hashlib.sha256(plain_password.encode()).hexdigest() == hashed_password
-    
-    # Normal bcrypt verification
-    try:
-        return bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
-    except Exception:
-        return False
-
-def create_access_token(data: dict, expires_delta: timedelta = None):
-    """Create a JWT access token"""
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=JWT_ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
-    return encoded_jwt
-
-def create_refresh_token(data: dict):
-    """Create a JWT refresh token with longer expiration"""
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=JWT_REFRESH_TOKEN_EXPIRE_DAYS)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
-    return encoded_jwt
-
-def decode_token(token: str):
-    """Decode and validate a JWT token"""
-    try:
-        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
-        return payload
-    except jwt.ExpiredSignatureError:
-        logger.warning("Token has expired")
-        raise HTTPException(status_code=401, detail="Token has expired")
-    except jwt.InvalidTokenError as e:
-        logger.warning(f"Invalid token: {str(e)}")
-        raise HTTPException(status_code=401, detail="Invalid token")
-    except Exception as e:
-        logger.error(f"Unexpected error decoding token: {str(e)}")
-        raise HTTPException(status_code=401, detail="Error validating credentials")
-
+# Authentication Functions
 async def verify_admin(api_key: str = Depends(api_key_header)):
-    """Enhanced admin verification with rate limiting"""
     if api_key != ADMIN_API_KEY:
-        # Log failed admin access attempt
-        logger.warning(f"Failed admin access attempt with API key: {api_key[:5]}...")
         raise HTTPException(
             status_code=401,
             detail="Invalid admin API key"
         )
     return True
 
-async def verify_user(api_key: str = Depends(api_key_header), authorization: str = Header(None)):
-    """Enhanced user verification supporting both API keys and JWT tokens"""
-    # If Authorization header is provided, try to use it first
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization.replace("Bearer ", "")
-        try:
-            payload = decode_token(token)
-            user_id = payload.get("user_id")
-            
-            # Verify the user exists and is active
-            user = db.users.find_one({"user_id": user_id})
-            if not user:
-                raise HTTPException(status_code=401, detail="User not found")
-                
-            if not user.get("active", True):
-                raise HTTPException(status_code=403, detail="User account is inactive")
-                
-            return user_id
-        except HTTPException:
-            # If token validation fails, fall through to API key check
-            pass
-    
+async def verify_user(api_key: str = Depends(api_key_header)):
     # Check if it's admin first
     if api_key == ADMIN_API_KEY:
         return ADMIN_ID
-    
-    # For backward compatibility, check if this is a JWT token
-    if api_key and api_key.count('.') == 2:  # Simple check for JWT format
-        try:
-            payload = decode_token(api_key)
-            user_id = payload.get("user_id")
-            
-            # Verify the user exists and is active
-            user = db.users.find_one({"user_id": user_id})
-            if not user:
-                raise HTTPException(status_code=401, detail="User not found")
-                
-            if not user.get("active", True):
-                raise HTTPException(status_code=403, detail="User account is inactive")
-                
-            return user_id
-        except Exception as e:
-            logger.error(f"JWT validation error: {str(e)}")
-            # Fall through to check if it's an API key
-    
-    # Legacy API key verification
+        
     user = db.users.find_one({"api_key": api_key})
     if not user:
-        # Log failed access attempt
-        logger.warning(f"Failed access attempt with API key: {api_key[:5]}...")
         raise HTTPException(
             status_code=401,
             detail="Invalid API key"
@@ -543,33 +224,12 @@ async def verify_user(api_key: str = Depends(api_key_header), authorization: str
     return user["user_id"]
 
 async def verify_api_key(api_key: str = Depends(api_key_header)):
-    """Verify API key for both admin and regular users with enhanced security"""
+    """Verify API key for both admin and regular users"""
     # Check if it's the admin API key
     if api_key == ADMIN_API_KEY:
         return {"user_id": ADMIN_ID, "is_admin": True}
     
-    # Check if it's a JWT token
-    if api_key.count('.') == 2:  # Simple check for JWT format
-        try:
-            payload = decode_token(api_key)
-            user_id = payload.get("user_id")
-            is_admin = payload.get("is_admin", False)
-            
-            # Verify the user exists and is active (unless it's admin)
-            if not is_admin:
-                user = db.users.find_one({"user_id": user_id})
-                if not user:
-                    raise HTTPException(status_code=401, detail="User not found")
-                    
-                if not user.get("active", True):
-                    raise HTTPException(status_code=403, detail="User account is inactive")
-            
-            return {"user_id": user_id, "is_admin": is_admin}
-        except Exception as e:
-            logger.error(f"JWT validation error: {str(e)}")
-            # Fall through to check if it's an API key
-    
-    # Legacy API key verification
+    # Otherwise check regular users
     user = db.users.find_one({"api_key": api_key})
     if not user:
         raise HTTPException(
@@ -588,8 +248,11 @@ async def verify_api_key(api_key: str = Depends(api_key_header)):
 
 # Utility Functions
 def generate_api_key() -> str:
-    """Generate a secure API key"""
     return secrets.token_hex(24)
+
+def hash_password(password: str) -> str:
+    """Hash password using SHA-256"""
+    return hashlib.sha256(password.encode()).hexdigest()
 
 def is_valid_object_id(id_str: str) -> bool:
     """Check if string is a valid MongoDB ObjectId"""
@@ -600,7 +263,6 @@ def is_valid_object_id(id_str: str) -> bool:
         return False
 
 def parse_time(time_str: str) -> datetime:
-    """Parse time string to datetime"""
     try:
         return datetime.strptime(time_str, "%H:%M").replace(tzinfo=IST)
     except ValueError:
@@ -610,7 +272,6 @@ def parse_time(time_str: str) -> datetime:
         )
 
 async def is_cancellation_allowed(tiffin: dict) -> bool:
-    """Check if tiffin cancellation is allowed based on time"""
     try:
         current_time = datetime.now(IST)
         tiffin_date = datetime.strptime(tiffin["date"], "%Y-%m-%d").date()
@@ -629,9 +290,7 @@ async def is_cancellation_allowed(tiffin: dict) -> bool:
         cancellation_datetime = IST.localize(datetime.combine(tiffin_date, cancellation_time))
         
         return current_time < cancellation_datetime
-    except Exception as e:
-        # Log the error for debugging
-        logger.error(f"Error checking cancellation allowance: {str(e)}")
+    except Exception:
         # If any error occurs, default to not allowing cancellation
         return False
 
@@ -652,35 +311,9 @@ def serialize_doc(doc):
                 doc[k] = [serialize_doc(item) for item in v]
     return doc
 
-def sanitize_input(text: str) -> str:
-    """Basic input sanitization"""
-    if not text:
-        return text
-    # Remove potentially dangerous characters
-    return text.replace('<', '&lt;').replace('>', '&gt;')
-
-# Request validation middleware
-@app.middleware("http")
-async def validate_request(request: Request, call_next):
-    """Middleware to validate and sanitize requests"""
-    # Verify HTTPS in production
-    if os.getenv("ENVIRONMENT") == "production":
-        if request.headers.get("x-forwarded-proto") != "https":
-            return HTTPException(status_code=403, detail="HTTPS required")
-    
-    # Add security headers
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    
-    return response
-
 # Health Check
 @app.get("/health")
-@limiter.limit("20/minute")
-async def health_check(request: Request):
+async def health_check():
     try:
         client.admin.command('ping')
         return {
@@ -688,7 +321,6 @@ async def health_check(request: Request):
             "timestamp": datetime.now(IST)
         }
     except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
         raise HTTPException(
             status_code=503,
             detail=str(e)
@@ -703,9 +335,9 @@ async def keep_alive():
         while True:
             try:
                 response = await client.get(f"{APP_URL}/health")
-                logger.info(f"Keep-alive ping sent. Status: {response.status_code}")
+                print(f"Keep-alive ping sent. Status: {response.status_code}")
             except Exception as e:
-                logger.error(f"Keep-alive ping failed: {str(e)}")
+                print(f"Keep-alive ping failed: {e}")
             await asyncio.sleep(PING_INTERVAL)
 
 # Root
@@ -719,141 +351,66 @@ async def root():
 # Authentication Endpoints
 @app.get("/auth/login")
 @app.post("/auth/login")
-@limiter.limit("10/minute")
-async def login(request: Request, user_id: str, password: str):
-    # Log login attempt (without password)
-    logger.info(f"Login attempt for user: {user_id}")
-    
+async def login(user_id: str, password: str):
     # Check for admin login
     if user_id == ADMIN_ID and password == ADMIN_PASSWORD:
-        # In production, you would hash ADMIN_PASSWORD too
-        logger.info(f"Admin login successful")
-        
-        # Create JWT tokens for admin
-        access_token = create_access_token(
-            data={"user_id": ADMIN_ID, "is_admin": True}
-        )
-        refresh_token = create_refresh_token(
-            data={"user_id": ADMIN_ID, "is_admin": True}
-        )
-        
-        # For backward compatibility, still provide API key
         return {
             "status": "success",
-            "api_key": access_token,  # Using access token as API key
-            "refresh_token": refresh_token,
+            "api_key": ADMIN_API_KEY,
             "role": "admin"
         }
     
     # Regular user login
     user = db.users.find_one({"user_id": user_id})
     if not user:
-        logger.warning(f"Login failed: User not found - {user_id}")
         raise HTTPException(
             status_code=401,
             detail="Invalid credentials"
         )
-    
-    # Verify password
+        
+    # For existing users who don't have hashed passwords yet
     stored_password = user.get("password", "")
-    password_valid = False
-    
-    if len(stored_password) == 64:  # Old SHA-256 hash
-        if stored_password == hashlib.sha256(password.encode()).hexdigest():
-            password_valid = True
-            # Update to bcrypt hash
-            hashed_password = hash_password(password)
-            db.users.update_one(
-                {"user_id": user_id},
-                {"$set": {"password": hashed_password}}
+    if len(stored_password) == 64:  # Already hashed
+        if stored_password != hash_password(password):
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid credentials"
             )
-            logger.info(f"Updated password hash for user {user_id} from SHA-256 to bcrypt")
-    else:  # bcrypt hash or plain text from old system
-        if verify_password(password, stored_password):
-            password_valid = True
-        elif stored_password == password:  # Plain text fallback for legacy
-            password_valid = True
-            # Update to bcrypt hash
-            hashed_password = hash_password(password)
-            db.users.update_one(
-                {"user_id": user_id},
-                {"$set": {"password": hashed_password}}
+    else:  # Plain text password from old system
+        if stored_password != password:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid credentials"
             )
-            logger.info(f"Updated password from plaintext to bcrypt for user {user_id}")
-    
-    if not password_valid:
-        logger.warning(f"Login failed: Invalid password for user {user_id}")
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid credentials"
+        # Update to hashed password
+        db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {"password": hash_password(password)}}
         )
     
     # Check if user is active
     if not user.get("active", True):
-        logger.warning(f"Login attempt for inactive user: {user_id}")
         raise HTTPException(
             status_code=403,
             detail="Your account is inactive. Please contact an administrator."
         )
     
-    # Create JWT tokens
-    access_token = create_access_token(
-        data={"user_id": user_id, "is_admin": False}
-    )
-    refresh_token = create_refresh_token(
-        data={"user_id": user_id, "is_admin": False}
-    )
-    
-    # Generate new API key for backward compatibility
+    # Generate new API key on each login for security
     new_api_key = generate_api_key()
     db.users.update_one(
         {"user_id": user_id},
         {"$set": {"api_key": new_api_key, "last_login": datetime.now(IST)}}
     )
     
-    logger.info(f"Login successful for user {user_id}")
-    
     return {
         "status": "success",
-        "api_key": access_token,  # Using access token as API key for compatibility
-        "refresh_token": refresh_token,
+        "api_key": new_api_key,
         "role": "user"
     }
 
-@app.post("/auth/refresh")
-async def refresh_token(refresh_token: str):
-    """Get a new access token using refresh token"""
-    try:
-        payload = decode_token(refresh_token)
-        user_id = payload.get("user_id")
-        is_admin = payload.get("is_admin", False)
-        
-        # Check if user still exists and is active (unless admin)
-        if not is_admin:
-            user = db.users.find_one({"user_id": user_id})
-            if not user:
-                raise HTTPException(status_code=401, detail="User not found")
-                
-            if not user.get("active", True):
-                raise HTTPException(status_code=403, detail="User account is inactive")
-        
-        # Create new access token
-        access_token = create_access_token(
-            data={"user_id": user_id, "is_admin": is_admin}
-        )
-        
-        return {
-            "status": "success",
-            "access_token": access_token
-        }
-    except Exception as e:
-        logger.error(f"Token refresh error: {str(e)}")
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
-
 # User Management Endpoints
 @app.post("/admin/users")
-@limiter.limit("20/minute")
-async def create_user(request: Request, user: UserCreate, _: bool = Depends(verify_admin)):
+async def create_user(user: UserCreate, _: bool = Depends(verify_admin)):
     # Check if user already exists
     if db.users.find_one({"user_id": user.user_id}):
         raise HTTPException(
@@ -867,9 +424,8 @@ async def create_user(request: Request, user: UserCreate, _: bool = Depends(veri
             detail="Email already registered"
         )
     
-        # Create user document
+    # Create user document
     user_dict = user.dict()
-    # Hash password with bcrypt
     hashed_password = hash_password(user.password)
     user_dict.update({
         "password": hashed_password,
@@ -881,33 +437,28 @@ async def create_user(request: Request, user: UserCreate, _: bool = Depends(veri
     
     try:
         db.users.insert_one(user_dict)
-        logger.info(f"New user created: {user.user_id}")
         return {"status": "success", "user_id": user.user_id}
     except Exception as e:
-        logger.error(f"Failed to create user: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to create user: {str(e)}"
         )
 
 @app.get("/admin/users")
-@limiter.limit("30/minute")
-async def get_all_users(request: Request, _: bool = Depends(verify_admin)):
+async def get_all_users(_: bool = Depends(verify_admin)):
     try:
         users = list(db.users.find({}, {"password": 0, "api_key": 0}))
         for user in users:
             user["_id"] = str(user["_id"])
         return users
     except Exception as e:
-        logger.error(f"Failed to fetch users: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch users: {str(e)}"
         )
 
 @app.get("/admin/users/{user_id}")
-@limiter.limit("30/minute")
-async def get_user(request: Request, user_id: str, _: bool = Depends(verify_admin)):
+async def get_user(user_id: str, _: bool = Depends(verify_admin)):
     user = db.users.find_one({"user_id": user_id}, {"password": 0, "api_key": 0})
     if not user:
         raise HTTPException(
@@ -918,9 +469,7 @@ async def get_user(request: Request, user_id: str, _: bool = Depends(verify_admi
     return user
 
 @app.put("/admin/users/{user_id}")
-@limiter.limit("20/minute")
 async def update_user(
-    request: Request,
     user_id: str,
     updates: Dict,
     _: bool = Depends(verify_admin)
@@ -933,8 +482,7 @@ async def update_user(
         )
     
     allowed_updates = {"name", "email", "address", "active"}
-    update_data = {k: sanitize_input(v) if isinstance(v, str) else v 
-                  for k, v in updates.items() if k in allowed_updates}
+    update_data = {k: v for k, v in updates.items() if k in allowed_updates}
     
     if not update_data:
         raise HTTPException(
@@ -965,13 +513,10 @@ async def update_user(
             detail="User not found"
         )
     
-    logger.info(f"User updated: {user_id}")
     return {"status": "success"}
 
 @app.put("/admin/users/{user_id}/reset-password")
-@limiter.limit("10/minute")
 async def reset_user_password(
-    request: Request,
     user_id: str,
     new_password: str,
     _: bool = Depends(verify_admin)
@@ -983,13 +528,6 @@ async def reset_user_password(
             detail="Admin password cannot be reset through this endpoint"
         )
     
-    # Validate password
-    if len(new_password) < 8:
-        raise HTTPException(
-            status_code=400,
-            detail="Password must be at least 8 characters long"
-        )
-    
     user = db.users.find_one({"user_id": user_id})
     if not user:
         raise HTTPException(
@@ -997,19 +535,16 @@ async def reset_user_password(
             detail="User not found"
         )
     
-    # Hash password with bcrypt
     hashed_password = hash_password(new_password)
     db.users.update_one(
         {"user_id": user_id},
         {"$set": {"password": hashed_password}}
     )
     
-    logger.info(f"Password reset for user: {user_id}")
     return {"status": "success", "message": "Password reset successfully"}
 
 @app.delete("/admin/users/{user_id}")
-@limiter.limit("10/minute")
-async def delete_user(request: Request, user_id: str, _: bool = Depends(verify_admin)):
+async def delete_user(user_id: str, _: bool = Depends(verify_admin)):
     # Don't allow deleting admin
     if user_id == ADMIN_ID:
         raise HTTPException(
@@ -1035,13 +570,11 @@ async def delete_user(request: Request, user_id: str, _: bool = Depends(verify_a
     db.notifications.delete_many({"user_id": user_id})
     db.tiffin_requests.delete_many({"user_id": user_id})
     
-    logger.info(f"User deleted: {user_id}")
     return {"status": "success"}
 
 # User Profile Endpoints
 @app.get("/user/profile")
-@limiter.limit("30/minute")
-async def get_user_profile(request: Request, user_id: str = Depends(verify_user)):
+async def get_user_profile(user_id: str = Depends(verify_user)):
     # If admin is checking profile, return admin info
     if user_id == ADMIN_ID:
         return {
@@ -1066,9 +599,7 @@ async def get_user_profile(request: Request, user_id: str = Depends(verify_user)
     return user
 
 @app.put("/user/profile")
-@limiter.limit("20/minute")
 async def update_user_profile(
-    request: Request,
     updates: Dict,
     user_id: str = Depends(verify_user)
 ):
@@ -1080,8 +611,7 @@ async def update_user_profile(
         )
     
     allowed_updates = {"name", "email", "address"}
-    update_data = {k: sanitize_input(v) if isinstance(v, str) else v 
-                  for k, v in updates.items() if k in allowed_updates}
+    update_data = {k: v for k, v in updates.items() if k in allowed_updates}
     
     if not update_data:
         raise HTTPException(
@@ -1112,13 +642,10 @@ async def update_user_profile(
             detail="User not found"
         )
     
-    logger.info(f"Profile updated for user: {user_id}")
     return {"status": "success"}
 
 @app.put("/user/password")
-@limiter.limit("10/minute")
 async def change_password(
-    request: Request,
     old_password: str,
     new_password: str,
     user_id: str = Depends(verify_user)
@@ -1130,13 +657,6 @@ async def change_password(
             detail="Admin password cannot be changed through this endpoint"
         )
     
-    # Validate new password
-    if len(new_password) < 8:
-        raise HTTPException(
-            status_code=400,
-            detail="New password must be at least 8 characters long"
-        )
-    
     user = db.users.find_one({"user_id": user_id})
     if not user:
         raise HTTPException(
@@ -1146,12 +666,18 @@ async def change_password(
     
     # Check if old password matches
     stored_password = user.get("password", "")
-    if not verify_password(old_password, stored_password):
-        logger.warning(f"Failed password change attempt for user: {user_id}")
-        raise HTTPException(
-            status_code=401,
-            detail="Current password is incorrect"
-        )
+    if len(stored_password) == 64:  # Already hashed
+        if stored_password != hash_password(old_password):
+            raise HTTPException(
+                status_code=401,
+                detail="Current password is incorrect"
+            )
+    else:  # Plain text password from old system
+        if stored_password != old_password:
+            raise HTTPException(
+                status_code=401,
+                detail="Current password is incorrect"
+            )
     
     # Update to new hashed password
     hashed_new_password = hash_password(new_password)
@@ -1160,13 +686,11 @@ async def change_password(
         {"$set": {"password": hashed_new_password}}
     )
     
-    logger.info(f"Password changed for user: {user_id}")
     return {"status": "success"}
 
 # Tiffin Management Endpoints
 @app.post("/admin/tiffins")
-@limiter.limit("30/minute")
-async def create_tiffin(request: Request, tiffin: TiffinCreate, _: bool = Depends(verify_admin)):
+async def create_tiffin(tiffin: TiffinCreate, _: bool = Depends(verify_admin)):
     try:
         # Validate assigned users exist
         for user_id in tiffin.assigned_users:
@@ -1175,6 +699,16 @@ async def create_tiffin(request: Request, tiffin: TiffinCreate, _: bool = Depend
                     status_code=400,
                     detail=f"User {user_id} not found or inactive"
                 )
+        
+        # Validate time formats
+        try:
+            datetime.strptime(tiffin.cancellation_time, "%H:%M")
+            datetime.strptime(tiffin.date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid date or time format. Use YYYY-MM-DD for date and HH:MM for times"
+            )
         
         # Create tiffin document
         tiffin_dict = tiffin.dict()
@@ -1197,7 +731,6 @@ async def create_tiffin(request: Request, tiffin: TiffinCreate, _: bool = Depend
             }
             db.notifications.insert_one(notification)
         
-        logger.info(f"Created new tiffin: {str(result.inserted_id)}")
         return {
             "status": "success",
             "tiffin_id": str(result.inserted_id)
@@ -1205,16 +738,12 @@ async def create_tiffin(request: Request, tiffin: TiffinCreate, _: bool = Depend
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to create tiffin: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to create tiffin: {str(e)}"
         )
-
 @app.post("/admin/batch-tiffins")
-@limiter.limit("20/minute")
 async def create_batch_tiffins(
-    request: Request,
     base_tiffin: TiffinBase,
     user_groups: List[List[str]],
     _: bool = Depends(verify_admin)
@@ -1233,7 +762,6 @@ async def create_batch_tiffins(
                 detail="Invalid date or time format. Use YYYY-MM-DD for date and HH:MM for times"
             )
         
-        created_tiffins = 0
         for user_group in user_groups:
             # Skip empty groups
             if not user_group:
@@ -1256,7 +784,7 @@ async def create_batch_tiffins(
             })
             
             result = db.tiffins.insert_one(tiffin_dict)
-            created_tiffins += 1
+            tiffin_id = str(result.inserted_id)
             
             # Create notifications for assigned users
             for user_id in user_group:
@@ -1270,24 +798,20 @@ async def create_batch_tiffins(
                 }
                 db.notifications.insert_one(notification)
         
-        logger.info(f"Created batch tiffins for {created_tiffins} user groups")
         return {
             "status": "success",
-            "message": f"Created tiffins for {created_tiffins} user groups"
+            "message": f"Created tiffins for {len(user_groups)} user groups"
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to create batch tiffins: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to create batch tiffins: {str(e)}"
         )
 
 @app.get("/admin/tiffins")
-@limiter.limit("50/minute")
 async def get_all_tiffins(
-    request: Request,
     date: Optional[str] = None,
     status: Optional[TiffinStatus] = None,
     time: Optional[TiffinTime] = None,
@@ -1338,16 +862,13 @@ async def get_all_tiffins(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch tiffins: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch tiffins: {str(e)}"
         )
 
 @app.get("/admin/tiffins/{tiffin_id}")
-@limiter.limit("50/minute")
 async def get_tiffin_by_id(
-    request: Request,
     tiffin_id: str,
     _: bool = Depends(verify_admin)
 ):
@@ -1381,16 +902,13 @@ async def get_tiffin_by_id(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch tiffin: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch tiffin: {str(e)}"
         )
 
 @app.put("/admin/tiffins/{tiffin_id}")
-@limiter.limit("30/minute")
 async def update_tiffin(
-    request: Request,
     tiffin_id: str,
     updates: TiffinUpdate,
     _: bool = Depends(verify_admin)
@@ -1421,6 +939,25 @@ async def update_tiffin(
                 status_code=400,
                 detail="No valid updates provided"
             )
+        
+        # Validate time formats if provided
+        if "cancellation_time" in update_data:
+            try:
+                datetime.strptime(update_data["cancellation_time"], "%H:%M")
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid cancellation_time format. Use HH:MM"
+                )
+                
+        if "delivery_time" in update_data:
+            try:
+                datetime.strptime(update_data["delivery_time"], "%H:%M")
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid delivery_time format. Use HH:MM"
+                )
         
         # Check if assigned users exist if provided
         if "assigned_users" in update_data:
@@ -1478,21 +1015,17 @@ async def update_tiffin(
                 }
                 db.notifications.insert_one(notification)
         
-        logger.info(f"Updated tiffin: {tiffin_id}")
         return {"status": "success"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update tiffin: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to update tiffin: {str(e)}"
         )
 
 @app.put("/admin/tiffins/{tiffin_id}/status")
-@limiter.limit("50/minute")
 async def update_tiffin_status(
-    request: Request,
     tiffin_id: str,
     status: TiffinStatus,
     _: bool = Depends(verify_admin)
@@ -1547,21 +1080,17 @@ async def update_tiffin_status(
                 }
                 db.notifications.insert_one(notification)
         
-        logger.info(f"Updated tiffin status: {tiffin_id} to {status}")
         return {"status": "success"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update tiffin status: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to update tiffin status: {str(e)}"
         )
 
 @app.put("/admin/tiffins/{tiffin_id}/assign")
-@limiter.limit("30/minute")
 async def assign_users_to_tiffin(
-    request: Request,
     tiffin_id: str,
     user_ids: List[str],
     _: bool = Depends(verify_admin)
@@ -1614,7 +1143,6 @@ async def assign_users_to_tiffin(
             }
             db.notifications.insert_one(notification)
         
-        logger.info(f"Assigned users to tiffin: {tiffin_id}")
         return {
             "status": "success",
             "assigned_users": list(set(tiffin["assigned_users"]).union(set(user_ids)))
@@ -1622,16 +1150,13 @@ async def assign_users_to_tiffin(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to assign users to tiffin: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to assign users to tiffin: {str(e)}"
         )
 
 @app.put("/admin/tiffins/{tiffin_id}/unassign")
-@limiter.limit("30/minute")
 async def unassign_users_from_tiffin(
-    request: Request,
     tiffin_id: str,
     user_ids: List[str],
     _: bool = Depends(verify_admin)
@@ -1680,7 +1205,6 @@ async def unassign_users_from_tiffin(
             }
             db.notifications.insert_one(notification)
         
-        logger.info(f"Unassigned users from tiffin: {tiffin_id}")
         return {
             "status": "success",
             "remaining_users": list(set(tiffin["assigned_users"]) - set(user_ids))
@@ -1688,15 +1212,13 @@ async def unassign_users_from_tiffin(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to unassign users from tiffin: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to unassign users from tiffin: {str(e)}"
         )
 
 @app.delete("/admin/tiffins/{tiffin_id}")
-@limiter.limit("20/minute")
-async def delete_tiffin(request: Request, tiffin_id: str, _: bool = Depends(verify_admin)):
+async def delete_tiffin(tiffin_id: str, _: bool = Depends(verify_admin)):
     try:
         if not is_valid_object_id(tiffin_id):
             raise HTTPException(
@@ -1711,7 +1233,8 @@ async def delete_tiffin(request: Request, tiffin_id: str, _: bool = Depends(veri
                 status_code=404,
                 detail="Tiffin not found"
             )
-                # Delete the tiffin
+            
+        # Delete the tiffin
         result = db.tiffins.delete_one({"_id": ObjectId(tiffin_id)})
         
         # Notify affected users
@@ -1726,21 +1249,17 @@ async def delete_tiffin(request: Request, tiffin_id: str, _: bool = Depends(veri
             }
             db.notifications.insert_one(notification)
         
-        logger.info(f"Deleted tiffin: {tiffin_id}")
         return {"status": "success"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to delete tiffin: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete tiffin: {str(e)}"
         )
 
 @app.get("/user/tiffins")
-@limiter.limit("60/minute")
 async def get_user_tiffins(
-    request: Request,
     user_id: str = Depends(verify_user),
     date: Optional[str] = None,
     time: Optional[TiffinTime] = None,
@@ -1792,16 +1311,13 @@ async def get_user_tiffins(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch user tiffins: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch user tiffins: {str(e)}"
         )
         
 @app.get("/user/tiffins/{tiffin_id}")
-@limiter.limit("60/minute")
 async def get_user_tiffin_by_id(
-    request: Request,
     tiffin_id: str,
     user_id: str = Depends(verify_user)
 ):
@@ -1832,16 +1348,13 @@ async def get_user_tiffin_by_id(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch tiffin: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch tiffin: {str(e)}"
         )
         
 @app.get("/user/tiffins/{tiffin_id}/cancellations")
-@limiter.limit("30/minute")
 async def get_tiffin_cancellations(
-    request: Request,
     tiffin_id: str,
     user_id: str = Depends(verify_user)
 ):
@@ -1894,15 +1407,13 @@ async def get_tiffin_cancellations(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get cancellations: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get cancellations: {str(e)}"
         )
 
 @app.get("/user/tiffins/today")
-@limiter.limit("60/minute")
-async def get_user_today_tiffins(request: Request, user_id: str = Depends(verify_user)):
+async def get_user_today_tiffins(user_id: str = Depends(verify_user)):
     try:
         today = datetime.now(IST).strftime("%Y-%m-%d")
         query = {
@@ -1920,16 +1431,13 @@ async def get_user_today_tiffins(request: Request, user_id: str = Depends(verify
             
         return serialized_tiffins
     except Exception as e:
-        logger.error(f"Failed to fetch today's tiffins: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch today's tiffins: {str(e)}"
         )
 
 @app.get("/user/tiffins/upcoming")
-@limiter.limit("60/minute")
 async def get_user_upcoming_tiffins(
-    request: Request,
     user_id: str = Depends(verify_user),
     days: int = Query(7, ge=1, le=30)
 ):
@@ -1953,16 +1461,13 @@ async def get_user_upcoming_tiffins(
             
         return serialized_tiffins
     except Exception as e:
-        logger.error(f"Failed to fetch upcoming tiffins: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch upcoming tiffins: {str(e)}"
         )
         
 @app.post("/user/cancel-tiffin")
-@limiter.limit("20/minute")
 async def cancel_tiffin(
-    request: Request,
     tiffin_id: str,
     user_id: str = Depends(verify_user)
 ):
@@ -2058,21 +1563,17 @@ async def cancel_tiffin(
                     {"$set": {"status": TiffinStatus.CANCELLED}}
                 )
         
-        logger.info(f"Tiffin cancelled: {tiffin_id} by user {user_id}")
         return {"status": "success"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to cancel tiffin: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to cancel tiffin: {str(e)}"
         )
 
 @app.get("/user/history")
-@limiter.limit("60/minute")
 async def get_user_history(
-    request: Request,
     user_id: str = Depends(verify_user),
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -2121,7 +1622,7 @@ async def get_user_history(
             item["_id"] = str(item["_id"])
             
         return {
-                        "total": total_count,
+            "total": total_count,
             "skip": skip,
             "limit": limit,
             "data": history
@@ -2129,31 +1630,34 @@ async def get_user_history(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch history: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch history: {str(e)}"
         )
 
 @app.post("/user/request-tiffin")
-@limiter.limit("20/minute")
 async def request_special_tiffin(
-    request: Request,
     request_data: dict,  # Change this to accept a plain dictionary instead of TiffinRequest
     user_id: str = Depends(verify_user)
 ):
     try:
         # Create a TiffinRequest object with the authenticated user's ID
+        request = TiffinRequest(
+            user_id=user_id,
+            description=request_data.get("description", ""),
+            preferred_date=request_data.get("preferred_date", ""),
+            preferred_time=request_data.get("preferred_time", ""),
+            special_instructions=request_data.get("special_instructions", None)
+        )
+        
+        # Validate date format
         try:
-            request = TiffinRequest(
-                user_id=user_id,
-                description=sanitize_input(request_data.get("description", "")),
-                preferred_date=request_data.get("preferred_date", ""),
-                preferred_time=request_data.get("preferred_time", ""),
-                special_instructions=sanitize_input(request_data.get("special_instructions", None))
+            datetime.strptime(request.preferred_date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid preferred_date format. Use YYYY-MM-DD"
             )
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
         
         request_dict = request.dict()
         request_dict.update({
@@ -2174,7 +1678,6 @@ async def request_special_tiffin(
         }
         db.notifications.insert_one(admin_notification)
         
-        logger.info(f"Special tiffin requested by {user_id} for {request.preferred_date}")
         return {
             "status": "success",
             "request_id": str(result.inserted_id)
@@ -2182,16 +1685,13 @@ async def request_special_tiffin(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to create tiffin request: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to create tiffin request: {str(e)}"
         )
 
 @app.get("/admin/tiffin-requests")
-@limiter.limit("50/minute")
 async def get_tiffin_requests(
-    request: Request,
     status: Optional[RequestStatus] = None,
     user_id: Optional[str] = None,
     _: bool = Depends(verify_admin)
@@ -2213,16 +1713,13 @@ async def get_tiffin_requests(
             
         return requests
     except Exception as e:
-        logger.error(f"Failed to fetch tiffin requests: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch tiffin requests: {str(e)}"
         )
 
 @app.get("/admin/tiffin-requests/{request_id}")
-@limiter.limit("50/minute")
 async def get_tiffin_request(
-    request: Request,
     request_id: str,
     _: bool = Depends(verify_admin)
 ):
@@ -2233,36 +1730,33 @@ async def get_tiffin_request(
                 detail="Invalid request ID format"
             )
             
-        tiffin_request = db.tiffin_requests.find_one({"_id": ObjectId(request_id)})
+        request = db.tiffin_requests.find_one({"_id": ObjectId(request_id)})
         
-        if not tiffin_request:
+        if not request:
             raise HTTPException(
                 status_code=404,
                 detail="Tiffin request not found"
             )
         
         # Get user details
-        user = db.users.find_one({"user_id": tiffin_request["user_id"]}, {"password": 0, "api_key": 0})
+        user = db.users.find_one({"user_id": request["user_id"]}, {"password": 0, "api_key": 0})
         if user:
             user["_id"] = str(user["_id"])
-            tiffin_request["user_details"] = user
+            request["user_details"] = user
         
-        tiffin_request["_id"] = str(tiffin_request["_id"])
+        request["_id"] = str(request["_id"])
         
-        return tiffin_request
+        return request
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch tiffin request: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch tiffin request: {str(e)}"
         )
 
 @app.post("/admin/tiffin-requests/{request_id}/approve")
-@limiter.limit("30/minute")
 async def approve_tiffin_request(
-    request: Request,
     request_id: str,
     approval: TiffinRequestApproval,
     _: bool = Depends(verify_admin)
@@ -2275,36 +1769,49 @@ async def approve_tiffin_request(
             )
             
         # Get the request
-        tiffin_request = db.tiffin_requests.find_one({"_id": ObjectId(request_id)})
-        if not tiffin_request:
+        request = db.tiffin_requests.find_one({"_id": ObjectId(request_id)})
+        if not request:
             raise HTTPException(
                 status_code=404,
                 detail="Tiffin request not found"
             )
             
         # Check if request is already processed
-        if tiffin_request["status"] != RequestStatus.PENDING:
+        if request["status"] != RequestStatus.PENDING:
             raise HTTPException(
                 status_code=400,
-                detail=f"Request is already {tiffin_request['status']}"
+                detail=f"Request is already {request['status']}"
+            )
+            
+        # Validate date and time formats
+        try:
+            datetime.strptime(approval.date, "%Y-%m-%d")
+            datetime.strptime(approval.cancellation_time, "%H:%M")
+            # Only validate delivery_time if it's provided
+            if approval.delivery_time:
+                datetime.strptime(approval.delivery_time, "%H:%M")
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid date or time format. Use YYYY-MM-DD for date and HH:MM for times"
             )
             
         # Create a new tiffin based on the request
         tiffin = {
             "date": approval.date,
             "time": approval.time,
-            "description": tiffin_request["description"],
+            "description": request["description"],
             "price": approval.price,
             "cancellation_time": approval.cancellation_time,
             # Set a default delivery time if not provided
             "delivery_time": approval.delivery_time or "12:00",
             "status": TiffinStatus.SCHEDULED,
             "menu_items": approval.menu_items or ["Special Tiffin"],
-            "assigned_users": [tiffin_request["user_id"]],
+            "assigned_users": [request["user_id"]],
             "created_at": datetime.now(IST),
             "updated_at": datetime.now(IST),
             "special_request": True,
-            "request_id": str(tiffin_request["_id"])
+            "request_id": str(request["_id"])
         }
         
         result = db.tiffins.insert_one(tiffin)
@@ -2323,7 +1830,7 @@ async def approve_tiffin_request(
         
         # Notify the user
         notification = {
-            "user_id": tiffin_request["user_id"],
+            "user_id": request["user_id"],
             "title": "Special Tiffin Request Approved",
             "message": f"Your special tiffin request for {approval.date} ({approval.time}) has been approved.",
             "type": "success",
@@ -2332,7 +1839,6 @@ async def approve_tiffin_request(
         }
         db.notifications.insert_one(notification)
         
-        logger.info(f"Approved tiffin request {request_id} for user {tiffin_request['user_id']}")
         return {
             "status": "success",
             "tiffin_id": str(result.inserted_id)
@@ -2340,16 +1846,13 @@ async def approve_tiffin_request(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to approve tiffin request: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to approve tiffin request: {str(e)}"
         )
         
 @app.post("/admin/tiffin-requests/{request_id}/reject")
-@limiter.limit("30/minute")
 async def reject_tiffin_request(
-    request: Request,
     request_id: str,
     reason: Optional[str] = None,
     _: bool = Depends(verify_admin)
@@ -2362,18 +1865,18 @@ async def reject_tiffin_request(
             )
             
         # Get the request
-        tiffin_request = db.tiffin_requests.find_one({"_id": ObjectId(request_id)})
-        if not tiffin_request:
+        request = db.tiffin_requests.find_one({"_id": ObjectId(request_id)})
+        if not request:
             raise HTTPException(
                 status_code=404,
                 detail="Tiffin request not found"
             )
             
         # Check if request is already processed
-        if tiffin_request["status"] != RequestStatus.PENDING:
+        if request["status"] != RequestStatus.PENDING:
             raise HTTPException(
                 status_code=400,
-                detail=f"Request is already {tiffin_request['status']}"
+                detail=f"Request is already {request['status']}"
             )
             
         # Update request status
@@ -2383,18 +1886,18 @@ async def reject_tiffin_request(
                 "$set": {
                     "status": RequestStatus.REJECTED,
                     "rejected_at": datetime.now(IST),
-                    "rejection_reason": sanitize_input(reason) if reason else None
+                    "rejection_reason": reason
                 }
             }
         )
         
         # Notify the user
-        message = f"Your special tiffin request for {tiffin_request['preferred_date']} ({tiffin_request['preferred_time']}) has been rejected."
+        message = f"Your special tiffin request for {request['preferred_date']} ({request['preferred_time']}) has been rejected."
         if reason:
             message += f" Reason: {reason}"
             
         notification = {
-            "user_id": tiffin_request["user_id"],
+            "user_id": request["user_id"],
             "title": "Special Tiffin Request Rejected",
             "message": message,
             "type": "warning",
@@ -2403,12 +1906,10 @@ async def reject_tiffin_request(
         }
         db.notifications.insert_one(notification)
         
-        logger.info(f"Rejected tiffin request {request_id} for user {tiffin_request['user_id']}")
         return {"status": "success"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to reject tiffin request: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to reject tiffin request: {str(e)}"
@@ -2416,13 +1917,8 @@ async def reject_tiffin_request(
 
 # Notice Management Endpoints
 @app.post("/admin/notices")
-@limiter.limit("30/minute")
-async def create_notice(request: Request, notice: Notice, _: bool = Depends(verify_admin)):
+async def create_notice(notice: Notice, _: bool = Depends(verify_admin)):
     try:
-        # Sanitize input
-        notice.title = sanitize_input(notice.title)
-        notice.content = sanitize_input(notice.content)
-        
         notice_dict = notice.dict()
         result = db.notices.insert_one(notice_dict)
         
@@ -2447,36 +1943,31 @@ async def create_notice(request: Request, notice: Notice, _: bool = Depends(veri
             }
             db.notifications.insert_one(notification)
         
-        logger.info(f"Created new notice: {str(result.inserted_id)}")
         return {
             "status": "success",
             "notice_id": str(result.inserted_id)
         }
     except Exception as e:
-        logger.error(f"Failed to create notice: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to create notice: {str(e)}"
         )
 
 @app.get("/admin/notices")
-@limiter.limit("50/minute")
-async def get_all_notices(request: Request, _: bool = Depends(verify_admin)):
+async def get_all_notices(_: bool = Depends(verify_admin)):
     try:
         notices = list(db.notices.find().sort("created_at", -1))
         for notice in notices:
             notice["_id"] = str(notice["_id"])
         return notices
     except Exception as e:
-        logger.error(f"Failed to fetch notices: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch notices: {str(e)}"
         )
 
 @app.get("/user/notices")
-@limiter.limit("60/minute")
-async def get_user_notices(request: Request, user_id: str = Depends(verify_user)):
+async def get_user_notices(user_id: str = Depends(verify_user)):
     try:
         current_time = datetime.now(IST)
         query = {
@@ -2491,16 +1982,13 @@ async def get_user_notices(request: Request, user_id: str = Depends(verify_user)
             notice["_id"] = str(notice["_id"])
         return notices
     except Exception as e:
-        logger.error(f"Failed to fetch notices: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch notices: {str(e)}"
         )
 
 @app.get("/admin/notices/{notice_id}")
-@limiter.limit("50/minute")
 async def get_notice_by_id(
-    request: Request,
     notice_id: str,
     _: bool = Depends(verify_admin)
 ):
@@ -2524,16 +2012,13 @@ async def get_notice_by_id(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch notice: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch notice: {str(e)}"
         )
            
 @app.put("/admin/notices/{notice_id}")
-@limiter.limit("30/minute")
 async def update_notice(
-    request: Request,
     notice_id: str,
     updates: Dict,
     _: bool = Depends(verify_admin)
@@ -2546,20 +2031,12 @@ async def update_notice(
             )
             
         allowed_updates = {"title", "content", "priority", "expires_at"}
-        update_data = {k: sanitize_input(v) if isinstance(v, str) else v 
-                      for k, v in updates.items() if k in allowed_updates}
+        update_data = {k: v for k, v in updates.items() if k in allowed_updates}
         
         if not update_data:
             raise HTTPException(
                 status_code=400,
                 detail="No valid updates provided"
-            )
-        
-        # Validate priority if provided
-        if "priority" in update_data and update_data["priority"] not in [0, 1, 2]:
-            raise HTTPException(
-                status_code=400,
-                detail="Priority must be 0 (Normal), 1 (Important), or 2 (Urgent)"
             )
         
         result = db.notices.update_one(
@@ -2573,20 +2050,17 @@ async def update_notice(
                 detail="Notice not found"
             )
         
-        logger.info(f"Updated notice: {notice_id}")
         return {"status": "success"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update notice: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to update notice: {str(e)}"
         )
 
 @app.delete("/admin/notices/{notice_id}")
-@limiter.limit("20/minute")
-async def delete_notice(request: Request, notice_id: str, _: bool = Depends(verify_admin)):
+async def delete_notice(notice_id: str, _: bool = Depends(verify_admin)):
     try:
         if not is_valid_object_id(notice_id):
             raise HTTPException(
@@ -2604,12 +2078,10 @@ async def delete_notice(request: Request, notice_id: str, _: bool = Depends(veri
         # Delete related notifications
         db.notifications.delete_many({"notice_id": notice_id})
         
-        logger.info(f"Deleted notice: {notice_id}")
         return {"status": "success"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to delete notice: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete notice: {str(e)}"
@@ -2617,14 +2089,8 @@ async def delete_notice(request: Request, notice_id: str, _: bool = Depends(veri
 
 # Poll Management Endpoints
 @app.post("/admin/polls")
-@limiter.limit("30/minute")
-async def create_poll(request: Request, poll: Poll, _: bool = Depends(verify_admin)):
+async def create_poll(poll: Poll, _: bool = Depends(verify_admin)):
     try:
-        # Sanitize input
-        poll.question = sanitize_input(poll.question)
-        for i, option in enumerate(poll.options):
-            poll.options[i].option = sanitize_input(option.option)
-        
         poll_dict = poll.dict()
         result = db.polls.insert_one(poll_dict)
         
@@ -2643,37 +2109,31 @@ async def create_poll(request: Request, poll: Poll, _: bool = Depends(verify_adm
             }
             db.notifications.insert_one(notification)
         
-        logger.info(f"Created new poll: {str(result.inserted_id)}")
         return {
             "status": "success",
             "poll_id": str(result.inserted_id)
         }
     except Exception as e:
-        logger.error(f"Failed to create poll: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to create poll: {str(e)}"
         )
 
 @app.get("/admin/polls")
-@limiter.limit("50/minute")
-async def get_all_polls(request: Request, _: bool = Depends(verify_admin)):
+async def get_all_polls(_: bool = Depends(verify_admin)):
     try:
         polls = list(db.polls.find().sort("end_date", -1))
         for poll in polls:
             poll["_id"] = str(poll["_id"])
         return polls
     except Exception as e:
-        logger.error(f"Failed to fetch polls: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch polls: {str(e)}"
         )
         
 @app.get("/admin/polls/{poll_id}/votes")
-@limiter.limit("50/minute")
 async def get_poll_votes(
-    request: Request,
     poll_id: str,
     _: bool = Depends(verify_admin)
 ):
@@ -2714,15 +2174,13 @@ async def get_poll_votes(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch poll votes: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch poll votes: {str(e)}"
         )
         
 @app.get("/user/polls")
-@limiter.limit("60/minute")
-async def get_active_polls(request: Request, user_id: str = Depends(verify_user)):
+async def get_active_polls(user_id: str = Depends(verify_user)):
     try:
         current_time = datetime.now(IST)
         query = {
@@ -2754,16 +2212,13 @@ async def get_active_polls(request: Request, user_id: str = Depends(verify_user)
         
         return polls
     except Exception as e:
-        logger.error(f"Failed to fetch polls: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch polls: {str(e)}"
         )
         
 @app.get("/user/polls/{poll_id}")
-@limiter.limit("60/minute")
 async def get_poll_by_id(
-    request: Request,
     poll_id: str,
     user_id: str = Depends(verify_user)
 ):
@@ -2794,25 +2249,17 @@ async def get_poll_by_id(
         if vote:
             poll["user_vote"] = vote["option_index"]
         
-        # For non-admin users, hide vote counts for active polls
-        if user_id != ADMIN_ID and poll["active"]:
-            for option in poll["options"]:
-                option["votes"] = 0
-        
         return poll
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch poll: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch poll: {str(e)}"
         )
 
 @app.post("/user/polls/{poll_id}/vote")
-@limiter.limit("30/minute")
 async def vote_poll(
-    request: Request,
     poll_id: str,
     option_index: int,
     user_id: str = Depends(verify_user)
@@ -2873,8 +2320,6 @@ async def vote_poll(
                 {"_id": ObjectId(poll_id)},
                 {"$inc": {f"options.{option_index}.votes": 1}}
             )
-            
-            logger.info(f"User {user_id} voted in poll {poll_id}")
         
         return {
             "status": "success", 
@@ -2883,16 +2328,13 @@ async def vote_poll(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to record vote: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to record vote: {str(e)}"
         )
         
 @app.put("/admin/polls/{poll_id}")
-@limiter.limit("30/minute")
 async def update_poll(
-    request: Request,
     poll_id: str,
     updates: Dict,
     _: bool = Depends(verify_admin)
@@ -2905,8 +2347,7 @@ async def update_poll(
             )
             
         allowed_updates = {"question", "options", "start_date", "end_date", "active"}
-        update_data = {k: sanitize_input(v) if isinstance(v, str) else v 
-                      for k, v in updates.items() if k in allowed_updates}
+        update_data = {k: v for k, v in updates.items() if k in allowed_updates}
         
         if not update_data:
             raise HTTPException(
@@ -2922,39 +2363,6 @@ async def update_poll(
                     status_code=400,
                     detail="Cannot modify poll options after voting has started"
                 )
-                
-            # Sanitize options
-            for i, option in enumerate(update_data["options"]):
-                if isinstance(option, dict) and "option" in option:
-                    update_data["options"][i]["option"] = sanitize_input(option["option"])
-        
-        # Validate question if provided
-        if "question" in update_data:
-            update_data["question"] = sanitize_input(update_data["question"])
-            if len(update_data["question"]) < 5:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Question must be at least 5 characters long"
-                )
-        
-        # Validate dates if provided
-        if "start_date" in update_data and "end_date" in update_data:
-            if update_data["end_date"] <= update_data["start_date"]:
-                raise HTTPException(
-                    status_code=400,
-                    detail="End date must be after start date"
-                )
-        elif "end_date" in update_data:
-            # Check against existing start_date
-            poll = db.polls.find_one({"_id": ObjectId(poll_id)})
-            if not poll:
-                raise HTTPException(status_code=404, detail="Poll not found")
-                
-            if update_data["end_date"] <= poll["start_date"]:
-                raise HTTPException(
-                    status_code=400,
-                    detail="End date must be after start date"
-                )
         
         result = db.polls.update_one(
             {"_id": ObjectId(poll_id)},
@@ -2967,20 +2375,17 @@ async def update_poll(
                 detail="Poll not found"
             )
         
-        logger.info(f"Updated poll: {poll_id}")
         return {"status": "success"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update poll: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to update poll: {str(e)}"
         )
 
 @app.delete("/admin/polls/{poll_id}")
-@limiter.limit("20/minute")
-async def delete_poll(request: Request, poll_id: str, _: bool = Depends(verify_admin)):
+async def delete_poll(poll_id: str, _: bool = Depends(verify_admin)):
     try:
         if not is_valid_object_id(poll_id):
             raise HTTPException(
@@ -2992,7 +2397,7 @@ async def delete_poll(request: Request, poll_id: str, _: bool = Depends(verify_a
         result = db.polls.delete_one({"_id": ObjectId(poll_id)})
         if result.deleted_count == 0:
             raise HTTPException(
-                                status_code=404,
+                status_code=404,
                 detail="Poll not found"
             )
             
@@ -3002,12 +2407,10 @@ async def delete_poll(request: Request, poll_id: str, _: bool = Depends(verify_a
         # Delete related notifications
         db.notifications.delete_many({"poll_id": poll_id})
         
-        logger.info(f"Deleted poll: {poll_id}")
         return {"status": "success"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to delete poll: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete poll: {str(e)}"
@@ -3015,9 +2418,7 @@ async def delete_poll(request: Request, poll_id: str, _: bool = Depends(verify_a
 
 # Invoice Management Endpoints
 @app.post("/admin/generate-invoices")
-@limiter.limit("20/minute")
 async def generate_invoices(
-    request: Request,
     start_date: str,
     end_date: str,
     _: bool = Depends(verify_admin)
@@ -3031,13 +2432,6 @@ async def generate_invoices(
             raise HTTPException(
                 status_code=400,
                 detail="Invalid date format. Use YYYY-MM-DD"
-            )
-            
-        # Validate date range
-        if start_date > end_date:
-            raise HTTPException(
-                status_code=400,
-                detail="Start date must be before or equal to end date"
             )
             
         users = list(db.users.find({"active": True}))
@@ -3097,7 +2491,6 @@ async def generate_invoices(
                     }
                     db.notifications.insert_one(notification)
         
-        logger.info(f"Generated {len(generated_invoices)} invoices for period {start_date} to {end_date}")
         return {
             "status": "success",
             "generated_invoices": len(generated_invoices)
@@ -3105,16 +2498,13 @@ async def generate_invoices(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to generate invoices: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate invoices: {str(e)}"
         )
 
 @app.get("/admin/invoices")
-@limiter.limit("50/minute")
 async def get_all_invoices(
-    request: Request,
     user_id: Optional[str] = None,
     paid: Optional[bool] = None,
     start_date: Optional[str] = None,
@@ -3165,16 +2555,13 @@ async def get_all_invoices(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch invoices: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch invoices: {str(e)}"
         )
 
 @app.get("/admin/invoices/{invoice_id}")
-@limiter.limit("50/minute")
 async def get_invoice_by_id(
-    request: Request,
     invoice_id: str,
     _: bool = Depends(verify_admin)
 ):
@@ -3216,16 +2603,13 @@ async def get_invoice_by_id(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch invoice: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch invoice: {str(e)}"
         )
 
 @app.get("/user/invoices")
-@limiter.limit("60/minute")
 async def get_user_invoices(
-    request: Request,
     user_id: str = Depends(verify_user),
     paid: Optional[bool] = None
 ):
@@ -3250,16 +2634,13 @@ async def get_user_invoices(
             
         return invoices
     except Exception as e:
-        logger.error(f"Failed to fetch invoices: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch invoices: {str(e)}"
         )
 
 @app.get("/user/invoices/{invoice_id}")
-@limiter.limit("60/minute")
 async def get_user_invoice_by_id(
-    request: Request,
     invoice_id: str,
     user_id: str = Depends(verify_user)
 ):
@@ -3300,16 +2681,13 @@ async def get_user_invoice_by_id(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch invoice: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch invoice: {str(e)}"
         )
 
 @app.put("/admin/invoices/{invoice_id}/mark-paid")
-@limiter.limit("30/minute")
 async def mark_invoice_paid(
-    request: Request,
     invoice_id: str,
     _: bool = Depends(verify_admin)
 ):
@@ -3348,21 +2726,17 @@ async def mark_invoice_paid(
         }
         db.notifications.insert_one(notification)
         
-        logger.info(f"Marked invoice {invoice_id} as paid")
         return {"status": "success"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to mark invoice as paid: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to mark invoice as paid: {str(e)}"
         )
 
 @app.delete("/admin/invoices/{invoice_id}")
-@limiter.limit("20/minute")
 async def delete_invoice(
-    request: Request,
     invoice_id: str,
     _: bool = Depends(verify_admin)
 ):
@@ -3384,12 +2758,10 @@ async def delete_invoice(
         # Delete related notifications
         db.notifications.delete_many({"invoice_id": invoice_id})
         
-        logger.info(f"Deleted invoice: {invoice_id}")
         return {"status": "success"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to delete invoice: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete invoice: {str(e)}"
@@ -3397,9 +2769,7 @@ async def delete_invoice(
 
 # Notification Endpoints
 @app.get("/user/notifications")
-@limiter.limit("60/minute")
 async def get_user_notifications(
-    request: Request,
     user_id: str = Depends(verify_user),
     read: Optional[bool] = None,
     limit: int = Query(50, ge=1, le=100)
@@ -3423,18 +2793,15 @@ async def get_user_notifications(
             "unread_count": unread_count
         }
     except Exception as e:
-        logger.error(f"Failed to fetch notifications: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch notifications: {str(e)}"
         )
 
 @app.post("/user/notifications/mark-read")
-@limiter.limit("60/minute")
 async def mark_notifications_read(
-    request: Request,
     notification_ids: List[str],
-        user_id: str = Depends(verify_user)
+    user_id: str = Depends(verify_user)
 ):
     try:
         # Convert string IDs to ObjectIds
@@ -3455,43 +2822,36 @@ async def mark_notifications_read(
             {"$set": {"read": True}}
         )
         
-        logger.info(f"Marked {result.modified_count} notifications as read for user {user_id}")
         return {
             "status": "success",
             "marked_count": result.modified_count
         }
     except Exception as e:
-        logger.error(f"Failed to mark notifications as read: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to mark notifications as read: {str(e)}"
         )
 
 @app.post("/user/notifications/mark-all-read")
-@limiter.limit("30/minute")
-async def mark_all_notifications_read(request: Request, user_id: str = Depends(verify_user)):
+async def mark_all_notifications_read(user_id: str = Depends(verify_user)):
     try:
         result = db.notifications.update_many(
             {"user_id": user_id, "read": False},
             {"$set": {"read": True}}
         )
         
-        logger.info(f"Marked all notifications as read for user {user_id}")
         return {
             "status": "success",
             "marked_count": result.modified_count
         }
     except Exception as e:
-        logger.error(f"Failed to mark all notifications as read: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to mark all notifications as read: {str(e)}"
         )
 
 @app.delete("/user/notifications/{notification_id}")
-@limiter.limit("60/minute")
 async def delete_notification(
-    request: Request,
     notification_id: str,
     user_id: str = Depends(verify_user)
 ):
@@ -3514,12 +2874,10 @@ async def delete_notification(
                 detail="Notification not found or not authorized to delete"
             )
             
-        logger.info(f"Deleted notification {notification_id} for user {user_id}")
         return {"status": "success"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to delete notification: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete notification: {str(e)}"
@@ -3527,8 +2885,7 @@ async def delete_notification(
 
 # Dashboard Statistics
 @app.get("/admin/dashboard")
-@limiter.limit("30/minute")
-async def get_dashboard_stats(request: Request, _: bool = Depends(verify_admin)):
+async def get_dashboard_stats(_: bool = Depends(verify_admin)):
     try:
         today = datetime.now(IST).strftime("%Y-%m-%d")
         current_month_start = datetime.now(IST).replace(day=1).strftime("%Y-%m-%d")
@@ -3578,15 +2935,13 @@ async def get_dashboard_stats(request: Request, _: bool = Depends(verify_admin))
         }
         return stats
     except Exception as e:
-        logger.error(f"Failed to fetch dashboard stats: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch dashboard stats: {str(e)}"
         )
 
 @app.get("/admin/user/{user_id}/stats")
-@limiter.limit("30/minute")
-async def get_user_stats(request: Request, user_id: str, _: bool = Depends(verify_admin)):
+async def get_user_stats(user_id: str, _: bool = Depends(verify_admin)):
     try:
         user = db.users.find_one({"user_id": user_id})
         if not user:
@@ -3630,15 +2985,13 @@ async def get_user_stats(request: Request, user_id: str, _: bool = Depends(verif
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to fetch user stats: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch user stats: {str(e)}"
         )
 
 @app.get("/user/dashboard/stats")
-@limiter.limit("60/minute")
-async def get_user_dashboard_stats(request: Request, user_id: str = Depends(verify_user)):
+async def get_user_dashboard_stats(user_id: str = Depends(verify_user)):
     try:
         # Get today's date
         today = datetime.now(IST).strftime("%Y-%m-%d")
@@ -3656,7 +3009,7 @@ async def get_user_dashboard_stats(request: Request, user_id: str = Depends(veri
         
         for tiffin in today_tiffins:
             if tiffin["status"] != TiffinStatus.CANCELLED:
-                delivery_hour = int(tiffin.get("delivery_time", "12:00").split(":")[0])
+                delivery_hour = int(tiffin["delivery_time"].split(":")[0])
                 if delivery_hour > current_hour:
                     next_delivery = tiffin["delivery_time"]
                     break
@@ -3670,7 +3023,7 @@ async def get_user_dashboard_stats(request: Request, user_id: str = Depends(veri
             }, sort=[("date", 1), ("delivery_time", 1)])
             
             if next_day_tiffin:
-                next_delivery = f"{next_day_tiffin['date']} {next_day_tiffin.get('delivery_time', '12:00')}"
+                next_delivery = f"{next_day_tiffin['date']} {next_day_tiffin['delivery_time']}"
         
         # Get current month tiffins
         current_month_tiffins = list(db.tiffins.find({
@@ -3710,7 +3063,6 @@ async def get_user_dashboard_stats(request: Request, user_id: str = Depends(veri
         
         return stats
     except Exception as e:
-        logger.error(f"Failed to fetch dashboard stats: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch dashboard stats: {str(e)}"
@@ -3718,8 +3070,7 @@ async def get_user_dashboard_stats(request: Request, user_id: str = Depends(veri
 
 # System Management
 @app.get("/admin/system-health")
-@limiter.limit("20/minute")
-async def check_system_health(request: Request, _: bool = Depends(verify_admin)):
+async def check_system_health(_: bool = Depends(verify_admin)):
     """Check system health and database status"""
     try:
         db_status = client.admin.command('ping')
@@ -3753,16 +3104,13 @@ async def check_system_health(request: Request, _: bool = Depends(verify_admin))
         }
         return stats
     except Exception as e:
-        logger.error(f"System health check failed: {str(e)}")
         raise HTTPException(
             status_code=503,
             detail=f"System health check failed: {str(e)}"
         )
 
 @app.post("/admin/cleanup-data")
-@limiter.limit("5/hour")
 async def cleanup_old_data(
-    request: Request,
     days: int = Query(30, ge=7, le=365),
     _: bool = Depends(verify_admin)
 ):
@@ -3799,7 +3147,6 @@ async def cleanup_old_data(
             "read": True
         })
         
-        logger.info(f"Performed data cleanup for data older than {days} days")
         return {
             "status": "success",
             "cleaned_up": {
@@ -3810,15 +3157,13 @@ async def cleanup_old_data(
             }
         }
     except Exception as e:
-        logger.error(f"Cleanup failed: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Cleanup failed: {str(e)}"
         )
 
 @app.get("/admin/export-data")
-@limiter.limit("5/day")
-async def export_data(request: Request, _: bool = Depends(verify_admin)):
+async def export_data(_: bool = Depends(verify_admin)):
     """Export all relevant data for backup"""
     try:
         export_data = {
@@ -3838,17 +3183,14 @@ async def export_data(request: Request, _: bool = Depends(verify_admin)):
                     if isinstance(doc, dict):
                         doc = serialize_doc(doc)
         
-        logger.info("Data export completed successfully")
         return export_data
     except Exception as e:
-        logger.error(f"Failed to export data: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to export data: {str(e)}"
         )
 
 # Cleanup Functions
-
 async def cleanup_old_data_task():
     """Cleanup old notices, polls, and other data periodically"""
     try:
@@ -3883,14 +3225,13 @@ async def cleanup_old_data_task():
             "read": True
         })
         
-        logger.info("Scheduled cleanup completed successfully")
+        print("Cleanup completed successfully")
     except Exception as e:
-        logger.error(f"Scheduled cleanup error: {str(e)}")
+        print(f"Cleanup error: {str(e)}")
 
 # Database Indexes
-
 def setup_indexes():
-    """Setup necessary database indexes for performance optimization"""
+    """Setup necessary database indexes"""
     try:
         # User indexes
         db.users.create_index([("user_id", ASCENDING)], unique=True)
@@ -3930,31 +3271,11 @@ def setup_indexes():
         db.tiffin_requests.create_index([("status", ASCENDING)])
         db.tiffin_requests.create_index([("created_at", ASCENDING)])
         
-        logger.info("Database indexes setup completed")
+        print("Database indexes setup completed")
     except Exception as e:
-        logger.error(f"Error setting up indexes: {str(e)}")
-
-# Security Enhancement Functions
-
-def check_for_security_updates():
-    """Check for security updates periodically"""
-    try:
-        # This is a placeholder for an actual security check
-        logger.info("Security update check completed")
-    except Exception as e:
-        logger.error(f"Error checking for security updates: {str(e)}")
-
-async def rotate_admin_api_key():
-    """Periodically rotate the admin API key for enhanced security"""
-    try:
-        # This would be implemented in a production system
-        # It would involve updating the admin API key and notifying administrators
-        logger.info("Admin API key rotation check completed")
-    except Exception as e:
-        logger.error(f"Error rotating admin API key: {str(e)}")
+        print(f"Error setting up indexes: {str(e)}")
 
 # Startup Event
-
 @app.on_event("startup")
 async def startup_event():
     """Initialize application on startup"""
@@ -3968,52 +3289,22 @@ async def startup_event():
         # Start keep-alive task
         asyncio.create_task(keep_alive())
         
-        # Check for security updates
-        check_for_security_updates()
-        
-        # Log the startup
-        logger.info("Application startup completed successfully")
+        print("Application startup completed successfully")
     except Exception as e:
-        logger.error(f"Startup error: {str(e)}")
+        print(f"Startup error: {str(e)}")
 
 # Shutdown Event
-
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on application shutdown"""
     try:
         # Close MongoDB connection
         client.close()
-        logger.info("Application shutdown completed successfully")
+        print("Application shutdown completed successfully")
     except Exception as e:
-        logger.error(f"Shutdown error: {str(e)}")
-
-# Error Handling
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request: Request, exc: Exception):
-    """Global exception handler"""
-    logger.error(f"Unhandled exception: {str(exc)}")
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "An unexpected error occurred. Please try again later."}
-    )
-
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    """HTTP exception handler"""
-    if exc.status_code >= 500:
-        logger.error(f"HTTP {exc.status_code} error: {exc.detail}")
-    elif exc.status_code >= 400:
-        logger.warning(f"HTTP {exc.status_code} error: {exc.detail}")
-    
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail}
-    )
+        print(f"Shutdown error: {str(e)}")
 
 # Main entry point
-
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",
