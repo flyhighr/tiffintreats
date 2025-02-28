@@ -1,4 +1,5 @@
 {
+  "id": "tiffintreats-pwa-app",
   "name": "Tiffin Treats",
   "short_name": "TiffinTreats",
   "description": "Tiffin service dashboard for ordering and bill management",
@@ -6,18 +7,34 @@
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#4CAF50",
+  "orientation": "any",
+  "launch_handler": {
+    "client_mode": "auto"
+  },
   "icons": [
     {
       "src": "/icons/logo(1).png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
       "src": "/icons/logo(2).png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/logo(1).png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/logo(2).png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }
