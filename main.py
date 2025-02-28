@@ -1273,7 +1273,7 @@ async def get_all_tiffins(
     try:
         query = {}
         
-                if date:
+        if date:
             # Validate date format
             try:
                 datetime.strptime(date, "%Y-%m-%d")
