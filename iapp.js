@@ -32,20 +32,14 @@ async function apiRequest(endpoint, options = {}) {
         options.headers = {};
     }
     
-    // Check if we have a JWT token
+    // Get auth data from localStorage
     const auth = JSON.parse(localStorage.getItem('tiffinTreatsAuth') || '{}');
-    const token = auth.apiKey; // The API is returning the JWT as 'api_key'
+    const token = auth.apiKey;
     
     if (token) {
-        // If the token contains periods, it's likely a JWT
-        if (token.includes('.')) {
-            options.headers['Authorization'] = `Bearer ${token}`;
-            console.log(`Making ${options.method || 'GET'} request to ${endpoint} with Bearer token`);
-        } else {
-            // Fall back to API key for backward compatibility
-            options.headers['X-API-Key'] = token;
-            console.log(`Making ${options.method || 'GET'} request to ${endpoint} with API key`);
-        }
+        // Add the token in both ways to ensure compatibility with the backend
+        options.headers['Authorization'] = `Bearer ${token}`;
+        options.headers['X-API-Key'] = token;
     }
     
     // Add Content-Type header for POST/PUT/PATCH requests with JSON body
@@ -64,10 +58,8 @@ async function apiRequest(endpoint, options = {}) {
         } else {
             const text = await response.text();
             try {
-                // Try to parse as JSON anyway
                 responseData = JSON.parse(text);
             } catch (e) {
-                // If it's not JSON, just use the text
                 responseData = text;
             }
         }
@@ -80,7 +72,6 @@ async function apiRequest(endpoint, options = {}) {
             if (typeof responseData === 'object') {
                 if (responseData.detail) {
                     if (Array.isArray(responseData.detail)) {
-                        // Handle Pydantic validation errors
                         errorMessage = responseData.detail[0]?.msg || 'Validation error';
                     } else {
                         errorMessage = responseData.detail;
@@ -107,7 +98,6 @@ async function refreshAccessToken() {
         const refreshToken = localStorage.getItem('refreshToken');
         if (!refreshToken) {
             console.error("No refresh token available");
-            // Force logout if no refresh token is available
             logout();
             return false;
         }
@@ -132,11 +122,8 @@ async function refreshAccessToken() {
         
         if (data.status === 'success' && data.access_token) {
             // Update the access token
-            accessToken = data.access_token;
-            
-            // Save it to localStorage
             const auth = JSON.parse(localStorage.getItem('tiffinTreatsAuth') || '{}');
-            auth.accessToken = accessToken;
+            auth.apiKey = data.access_token;
             localStorage.setItem('tiffinTreatsAuth', JSON.stringify(auth));
             
             console.log("Access token refreshed successfully");
@@ -159,20 +146,14 @@ function checkAuthentication() {
     if (savedAuth) {
         try {
             const auth = JSON.parse(savedAuth);
-            const token = auth.apiKey;
+            apiKey = auth.apiKey;
             userRole = auth.role;
             
-            // Make a direct health check to verify token
-            const headers = {};
-            
-            if (token) {
-                // If the token contains periods, it's likely a JWT
-                if (token.includes('.')) {
-                    headers['Authorization'] = `Bearer ${token}`;
-                } else {
-                    headers['X-API-Key'] = token;
-                }
-            }
+            // Make a health check with both authentication methods
+            const headers = {
+                'Authorization': `Bearer ${apiKey}`,
+                'X-API-Key': apiKey
+            };
             
             fetch(`${API_BASE_URL}/health`, { headers })
             .then(response => {
@@ -181,9 +162,17 @@ function checkAuthentication() {
                     showApp();
                     loadDashboard();
                 } else {
-                    console.error("Authentication verification failed");
-                    localStorage.removeItem('tiffinTreatsAuth');
-                    showLogin();
+                    // Try to refresh the token
+                    refreshAccessToken().then(success => {
+                        if (success) {
+                            showApp();
+                            loadDashboard();
+                        } else {
+                            localStorage.removeItem('tiffinTreatsAuth');
+                            localStorage.removeItem('refreshToken');
+                            showLogin();
+                        }
+                    });
                 }
             })
             .catch(error => {
@@ -215,18 +204,19 @@ async function login(userId, password) {
         console.log("Login response:", data);
         
         if (data.status === 'success') {
-            // Save auth data - the API is returning the JWT as 'api_key'
+            // Save auth data
             localStorage.setItem('tiffinTreatsAuth', JSON.stringify({
                 apiKey: data.api_key,
                 role: data.role
             }));
             
-            // Also save the refresh token if provided
+            // Save refresh token separately if provided
             if (data.refresh_token) {
                 localStorage.setItem('refreshToken', data.refresh_token);
             }
             
             userRole = data.role;
+            apiKey = data.api_key;
             
             // For admin, we don't need to fetch profile
             if (userRole === 'admin') {
