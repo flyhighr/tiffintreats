@@ -91,7 +91,7 @@ class User(UserBase):
 class TiffinBase(BaseModel):
     date: str
     time: TiffinTime
-    description: str
+    description: Optional[str] = None
     price: float
     cancellation_time: str
     status: TiffinStatus = TiffinStatus.SCHEDULED
@@ -147,7 +147,9 @@ class TiffinRequestApproval(BaseModel):
     date: str
     time: TiffinTime
     price: float
+    delivery_time: str
     cancellation_time: str
+    menu_items: Optional[List[str]] = None
 
 class Invoice(BaseModel):
     user_id: str
@@ -741,7 +743,6 @@ async def create_tiffin(tiffin: TiffinCreate, _: bool = Depends(verify_admin)):
             detail=f"Failed to create tiffin: {str(e)}"
         )
 
-
 @app.post("/admin/batch-tiffins")
 async def create_batch_tiffins(
     base_tiffin: TiffinBase,
@@ -1291,9 +1292,14 @@ async def get_user_tiffins(
         # Get tiffins with pagination
         tiffins = list(db.tiffins.find(query).sort("date", -1).skip(skip).limit(limit))
         
-        # Serialize tiffins
+        # Serialize tiffins and remove description for regular users
         for tiffin in tiffins:
             tiffin["_id"] = str(tiffin["_id"])
+            if user_id != ADMIN_ID:  # Only hide for non-admin users
+                if "description" in tiffin:
+                    tiffin.pop("description", None)
+                if "delivery_time" in tiffin:
+                    tiffin.pop("delivery_time", None)
             
         return {
             "total": total_count,
@@ -1308,6 +1314,7 @@ async def get_user_tiffins(
             status_code=500,
             detail=f"Failed to fetch user tiffins: {str(e)}"
         )
+        
 @app.get("/user/tiffins/{tiffin_id}")
 async def get_user_tiffin_by_id(
     tiffin_id: str,
@@ -1345,7 +1352,64 @@ async def get_user_tiffin_by_id(
             detail=f"Failed to fetch tiffin: {str(e)}"
         )
         
-# Modify these endpoints in your FastAPI code
+@app.get("/user/tiffins/{tiffin_id}/cancellations")
+async def get_tiffin_cancellations(
+    tiffin_id: str,
+    user_id: str = Depends(verify_user)
+):
+    try:
+        if not is_valid_object_id(tiffin_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid tiffin ID format"
+            )
+            
+        # Get the tiffin
+        tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
+        if not tiffin:
+            raise HTTPException(
+                status_code=404,
+                detail="Tiffin not found"
+            )
+            
+        # Check if user is authorized (admin or assigned to this tiffin)
+        if user_id != ADMIN_ID and user_id not in tiffin.get("assigned_users", []):
+            raise HTTPException(
+                status_code=403,
+                detail="Not authorized to view this tiffin"
+            )
+            
+        # Get cancellation events from tiffin history
+        cancellations = []
+        
+        # If tiffin has a cancellations field, return it
+        if "cancellations" in tiffin:
+            for cancellation in tiffin["cancellations"]:
+                # Get user details
+                cancelled_user = db.users.find_one(
+                    {"user_id": cancellation["user_id"]},
+                    {"name": 1, "email": 1}
+                )
+                
+                cancellation_info = {
+                    "user_id": cancellation["user_id"],
+                    "name": cancelled_user.get("name", "Unknown User") if cancelled_user else "Unknown User",
+                    "email": cancelled_user.get("email", "No email") if cancelled_user else "No email",
+                    "cancelled_at": cancellation["cancelled_at"]
+                }
+                cancellations.append(cancellation_info)
+                
+        return {
+            "tiffin_id": str(tiffin["_id"]),
+            "cancellations": cancellations
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get cancellations: {str(e)}"
+        )
 
 @app.get("/user/tiffins/today")
 async def get_user_today_tiffins(user_id: str = Depends(verify_user)):
@@ -1434,8 +1498,11 @@ async def cancel_tiffin(
                 detail="Cancellation time has passed"
             )
         
-        # Get user details for cancellation record
-        user_details = db.users.find_one({"user_id": user_id}, {"name": 1, "email": 1})
+        # Record cancellation event
+        cancellation_record = {
+            "user_id": user_id,
+            "cancelled_at": datetime.now(IST)
+        }
         
         # For admin, just change status
         if user_id == ADMIN_ID:
@@ -1444,13 +1511,10 @@ async def cancel_tiffin(
                 {
                     "$set": {
                         "status": TiffinStatus.CANCELLED,
-                        "updated_at": datetime.now(IST),
-                        "cancelled_by": {
-                            "user_id": ADMIN_ID,
-                            "name": "Administrator",
-                            "email": "admin@tiffintreats.com",
-                            "cancelled_at": datetime.now(IST)
-                        }
+                        "updated_at": datetime.now(IST)
+                    },
+                    "$push": {
+                        "cancellations": cancellation_record
                     }
                 }
             )
@@ -1467,18 +1531,15 @@ async def cancel_tiffin(
                 }
                 db.notifications.insert_one(notification)
         else:
-            # For regular user, remove them from assigned_users and record who cancelled
+            # For regular user, remove them from assigned_users
             result = db.tiffins.update_one(
                 {"_id": ObjectId(tiffin_id)},
                 {
                     "$pull": {"assigned_users": user_id},
-                    "$push": {"cancellations": {
-                        "user_id": user_id,
-                        "name": user_details.get("name", "Unknown"),
-                        "email": user_details.get("email", "Unknown"),
-                        "cancelled_at": datetime.now(IST)
-                    }},
-                    "$set": {"updated_at": datetime.now(IST)}
+                    "$set": {"updated_at": datetime.now(IST)},
+                    "$push": {
+                        "cancellations": cancellation_record
+                    }
                 }
             )
             
@@ -2092,7 +2153,7 @@ async def get_active_polls(user_id: str = Depends(verify_user)):
             if vote:
                 poll["user_vote"] = vote["option_index"]
             
-            # For regular users, hide vote counts
+            # For non-admin users, don't show vote counts
             if user_id != ADMIN_ID:
                 for option in poll["options"]:
                     option["votes"] = 0
@@ -2103,7 +2164,7 @@ async def get_active_polls(user_id: str = Depends(verify_user)):
             status_code=500,
             detail=f"Failed to fetch polls: {str(e)}"
         )
-
+        
 @app.get("/user/polls/{poll_id}")
 async def get_poll_by_id(
     poll_id: str,
@@ -2126,6 +2187,7 @@ async def get_poll_by_id(
         
         poll["_id"] = str(poll["_id"])
         
+        # Check if user has already voted
         vote = db.poll_votes.find_one({
             "poll_id": ObjectId(poll_id),
             "user_id": user_id
@@ -2135,10 +2197,6 @@ async def get_poll_by_id(
         if vote:
             poll["user_vote"] = vote["option_index"]
         
-        if user_id != ADMIN_ID:
-            for option in poll["options"]:
-                option["votes"] = 0
-        
         return poll
     except HTTPException:
         raise
@@ -2147,7 +2205,7 @@ async def get_poll_by_id(
             status_code=500,
             detail=f"Failed to fetch poll: {str(e)}"
         )
-        
+
 @app.post("/user/polls/{poll_id}/vote")
 async def vote_poll(
     poll_id: str,
@@ -2211,14 +2269,10 @@ async def vote_poll(
                 {"$inc": {f"options.{option_index}.votes": 1}}
             )
         
-        # For regular users, don't return the results
-        if user_id != ADMIN_ID:
-            return {"status": "success", "message": "Your vote has been recorded"}
-        
-        # For admin, return the updated poll results
-        updated_poll = db.polls.find_one({"_id": ObjectId(poll_id)})
-        updated_poll["_id"] = str(updated_poll["_id"])
-        return {"status": "success", "poll": updated_poll}
+        return {
+            "status": "success", 
+            "message": "Your vote has been recorded"
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -2226,8 +2280,7 @@ async def vote_poll(
             status_code=500,
             detail=f"Failed to record vote: {str(e)}"
         )
-
-
+        
 @app.put("/admin/polls/{poll_id}")
 async def update_poll(
     poll_id: str,
