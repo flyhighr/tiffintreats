@@ -959,9 +959,14 @@ async function loadTiffinCancellations(tiffinId) {
                 let html = '<h3>Cancellations</h3><ul class="cancellations-list">';
                 
                 cancellations.forEach(cancellation => {
+                    // Display name with email or just name if email is not available
+                    const displayText = cancellation.name && cancellation.email 
+                        ? `${cancellation.name} (${cancellation.email})`
+                        : cancellation.name || cancellation.email || 'Unknown user';
+                    
                     html += `
                         <li class="cancellation-item">
-                            <span class="cancellation-user">${cancellation.name} (${cancellation.email})</span>
+                            <span class="cancellation-user">${displayText}</span>
                             <span class="cancellation-time">Cancelled on ${formatDate(cancellation.cancelled_at)}</span>
                         </li>
                     `;
@@ -1869,13 +1874,26 @@ async function loadPendingRequests() {
             return;
         }
         
+        // Fetch all users to get names
+        const usersResponse = await apiRequest('/admin/users');
+        const users = usersResponse || [];
+        
+        // Create a map of user_id to name
+        const userMap = {};
+        users.forEach(user => {
+            userMap[user.user_id] = user.name;
+        });
+        
         let requestsHTML = '';
         
         requests.forEach(request => {
+            const userName = userMap[request.user_id] || request.user_id;
+            const displayName = `${userName} (${request.user_id})`;
+            
             requestsHTML += `
                 <div class="request-card">
                     <div class="request-header">
-                        <span>Request from ${request.user_id}</span>
+                        <span>Request from ${displayName}</span>
                         <span class="request-date">${formatDate(request.created_at)}</span>
                     </div>
                     <div class="request-body">
@@ -1906,7 +1924,6 @@ async function loadPendingRequests() {
         
         requestsList.innerHTML = requestsHTML;
         
-        // Add event listeners to approve/reject buttons
         document.querySelectorAll('.approve-request-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const requestId = e.target.dataset.requestId;
@@ -2306,6 +2323,7 @@ function setupTiffinTabs() {
     });
 }
 
+// In the setupCreateTiffinForm function
 function setupCreateTiffinForm() {
     // Get the create tiffin form
     const createTiffinForm = document.getElementById('create-tiffin-tab');
@@ -2330,6 +2348,28 @@ function setupCreateTiffinForm() {
         deliveryTimeSection.remove();
     }
     
+    // Auto-set cancellation time based on tiffin time
+    const tiffinTimeSelect = document.getElementById('tiffin-time');
+    const cancellationTimeInput = document.getElementById('tiffin-cancellation');
+    
+    if (tiffinTimeSelect && cancellationTimeInput) {
+        tiffinTimeSelect.addEventListener('change', () => {
+            const selectedTime = tiffinTimeSelect.value;
+            if (selectedTime === 'morning') {
+                cancellationTimeInput.value = '06:00'; // 6 AM for morning tiffins
+            } else if (selectedTime === 'evening') {
+                cancellationTimeInput.value = '12:00'; // 12 PM for evening tiffins
+            }
+        });
+        
+        // Set initial value
+        if (tiffinTimeSelect.value === 'morning') {
+            cancellationTimeInput.value = '06:00';
+        } else if (tiffinTimeSelect.value === 'evening') {
+            cancellationTimeInput.value = '12:00';
+        }
+    }
+    
     // Update create tiffin button click handler
     const createTiffinBtn = document.getElementById('create-tiffin-btn');
     if (createTiffinBtn) {
@@ -2341,6 +2381,7 @@ function setupCreateTiffinForm() {
         newCreateTiffinBtn.addEventListener('click', createTiffinWithoutMenuItems);
     }
 }
+
 // New function to create tiffin without menu items
 async function createTiffinWithoutMenuItems() {
     try {
@@ -2429,6 +2470,28 @@ function setupBatchCreateTiffinForm() {
     const deliveryTimeSection = batchCreateTiffinForm.querySelector('.form-group:has(#batch-tiffin-delivery)');
     if (deliveryTimeSection) {
         deliveryTimeSection.remove();
+    }
+    
+    // Auto-set cancellation time based on tiffin time
+    const tiffinTimeSelect = document.getElementById('batch-tiffin-time');
+    const cancellationTimeInput = document.getElementById('batch-tiffin-cancellation');
+    
+    if (tiffinTimeSelect && cancellationTimeInput) {
+        tiffinTimeSelect.addEventListener('change', () => {
+            const selectedTime = tiffinTimeSelect.value;
+            if (selectedTime === 'morning') {
+                cancellationTimeInput.value = '06:00'; // 6 AM for morning tiffins
+            } else if (selectedTime === 'evening') {
+                cancellationTimeInput.value = '12:00'; // 12 PM for evening tiffins
+            }
+        });
+        
+        // Set initial value
+        if (tiffinTimeSelect.value === 'morning') {
+            cancellationTimeInput.value = '06:00';
+        } else if (tiffinTimeSelect.value === 'evening') {
+            cancellationTimeInput.value = '12:00';
+        }
     }
     
     // Update batch create tiffin button click handler
@@ -2798,6 +2861,17 @@ async function showApproveRequestModal(requestId) {
         const request = await apiRequest(`/admin/tiffin-requests/${requestId}`);
         console.log("Request details loaded:", request);
         
+        // Get user details
+        let userName = request.user_id;
+        try {
+            const user = await apiRequest(`/admin/users/${request.user_id}`);
+            if (user && user.name) {
+                userName = `${user.name} (${request.user_id})`;
+            }
+        } catch (e) {
+            console.warn("Could not fetch user details:", e);
+        }
+        
         // Create a modal dynamically
         const modal = document.createElement('div');
         modal.className = 'modal active';
@@ -2811,7 +2885,7 @@ async function showApproveRequestModal(requestId) {
                 </div>
                 <div class="modal-body">
                     <div class="form-group">
-                        <label>Request from: ${request.user_id}</label>
+                        <label>Request from: ${userName}</label>
                         <p>${request.description}</p>
                     </div>
                     <div class="form-group">
@@ -2831,7 +2905,7 @@ async function showApproveRequestModal(requestId) {
                     </div>
                     <div class="form-group">
                         <label for="approve-cancellation">Cancellation Time</label>
-                        <input type="time" id="approve-cancellation" value="08:00" required>
+                        <input type="time" id="approve-cancellation" value="${request.preferred_time === 'morning' ? '06:00' : '12:00'}" required>
                     </div>
                     <button id="submit-approval" class="action-button">Approve Request</button>
                 </div>
@@ -3830,8 +3904,31 @@ function formatDate(dateString) {
             return dateString;
         }
         
+        // Get today, yesterday, and tomorrow for comparison
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        
+        const dateOnly = new Date(date);
+        dateOnly.setHours(0, 0, 0, 0);
+        
+        let prefix = '';
+        if (dateOnly.getTime() === today.getTime()) {
+            prefix = 'Today, ';
+        } else if (dateOnly.getTime() === yesterday.getTime()) {
+            prefix = 'Yesterday, ';
+        } else if (dateOnly.getTime() === tomorrow.getTime()) {
+            prefix = 'Tomorrow, ';
+        }
+        
+        // Format the date
         const options = { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' };
-        return date.toLocaleDateString(undefined, options);
+        return prefix + date.toLocaleDateString(undefined, options);
     } catch (error) {
         console.error('Error formatting date:', error);
         return dateString || 'N/A';
@@ -3857,8 +3954,8 @@ function formatTiffinTime(timeStr) {
     if (!timeStr) return 'N/A';
     
     const timeMap = {
-        'morning': 'Morning',
-        'evening': 'Evening'
+        'morning': 'Morning (AM)',
+        'evening': 'Evening (PM)'
     };
     
     return timeMap[timeStr] || timeStr;
@@ -3880,8 +3977,21 @@ function formatTiffinStatus(status) {
 }
 
 function showNotification(message, type = 'info') {
-    const toast = document.getElementById('notification-toast');
-    const toastMessage = document.getElementById('notification-toast-message');
+    // Create toast if it doesn't exist
+    let toast = document.getElementById('notification-toast');
+    let toastMessage = document.getElementById('notification-toast-message');
+    
+    if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'notification-toast';
+        toast.className = 'notification-toast';
+        
+        toastMessage = document.createElement('span');
+        toastMessage.id = 'notification-toast-message';
+        
+        toast.appendChild(toastMessage);
+        document.body.appendChild(toast);
+    }
     
     toastMessage.textContent = message;
     
@@ -3900,12 +4010,22 @@ function showNotification(message, type = 'info') {
             toast.style.backgroundColor = 'var(--info)';
     }
     
+    // Remove active class first to reset animation
+    toast.classList.remove('active');
+    
+    // Trigger reflow to restart animation
+    void toast.offsetWidth;
+    
+    // Add active class to show notification
     toast.classList.add('active');
     
     // Hide after 3 seconds
-    setTimeout(() => {
+    const toastTimeout = setTimeout(() => {
         toast.classList.remove('active');
     }, 3000);
+    
+    // Store timeout ID on the element to clear it if needed
+    toast.dataset.timeoutId = toastTimeout;
 }
 
 function showConfirmDialog(title, message, onConfirm) {
