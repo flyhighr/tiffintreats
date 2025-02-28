@@ -3008,22 +3008,33 @@ async def get_user_dashboard_stats(user_id: str = Depends(verify_user)):
         current_hour = datetime.now(IST).hour
         
         for tiffin in today_tiffins:
-            if tiffin["status"] != TiffinStatus.CANCELLED:
-                delivery_hour = int(tiffin["delivery_time"].split(":")[0])
-                if delivery_hour > current_hour:
-                    next_delivery = tiffin["delivery_time"]
-                    break
+            if tiffin.get("status") != TiffinStatus.CANCELLED:
+                # Check if delivery_time exists and is in the right format
+                delivery_time = tiffin.get("delivery_time")
+                if delivery_time and ":" in delivery_time:
+                    try:
+                        delivery_hour = int(delivery_time.split(":")[0])
+                        if delivery_hour > current_hour:
+                            next_delivery = delivery_time
+                            break
+                    except (ValueError, IndexError):
+                        continue
         
         # If no upcoming delivery today, find the next day's first delivery
-        if not next_delivery and today_tiffins:
+        if not next_delivery:
             next_day_tiffin = db.tiffins.find_one({
                 "assigned_users": user_id,
                 "date": {"$gt": today},
                 "status": {"$ne": TiffinStatus.CANCELLED}
-            }, sort=[("date", 1), ("delivery_time", 1)])
+            }, sort=[("date", 1), ("time", 1)])
             
             if next_day_tiffin:
-                next_delivery = f"{next_day_tiffin['date']} {next_day_tiffin['delivery_time']}"
+                delivery_time = next_day_tiffin.get("delivery_time", "")
+                if delivery_time:
+                    next_delivery = f"{next_day_tiffin['date']} {delivery_time}"
+                else:
+                    # If no delivery time, just show the date and time of day
+                    next_delivery = f"{next_day_tiffin['date']} ({next_day_tiffin.get('time', 'unknown')})"
         
         # Get current month tiffins
         current_month_tiffins = list(db.tiffins.find({
@@ -3051,11 +3062,20 @@ async def get_user_dashboard_stats(user_id: str = Depends(verify_user)):
             "read": False
         })
         
+        # Calculate month spent safely
+        month_spent = 0
+        for t in current_month_tiffins:
+            if t.get("status") != TiffinStatus.CANCELLED:
+                try:
+                    month_spent += float(t.get("price", 0))
+                except (ValueError, TypeError):
+                    pass
+        
         stats = {
             "today_tiffins": len(today_tiffins),
             "next_delivery": next_delivery,
-            "month_tiffins": len([t for t in current_month_tiffins if t["status"] != TiffinStatus.CANCELLED]),
-            "month_spent": sum(t.get("price", 0) for t in current_month_tiffins if t["status"] != TiffinStatus.CANCELLED),
+            "month_tiffins": len([t for t in current_month_tiffins if t.get("status") != TiffinStatus.CANCELLED]),
+            "month_spent": month_spent,
             "pending_invoices": pending_invoices,
             "upcoming_tiffins": upcoming_tiffins,
             "unread_notifications": unread_notifications
@@ -3063,6 +3083,7 @@ async def get_user_dashboard_stats(user_id: str = Depends(verify_user)):
         
         return stats
     except Exception as e:
+        print(f"Error in dashboard stats: {str(e)}")  # Log the actual error
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch dashboard stats: {str(e)}"
