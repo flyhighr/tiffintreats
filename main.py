@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends, Security, BackgroundTasks, Query
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, EmailStr
@@ -293,6 +294,99 @@ async def is_cancellation_allowed(tiffin: dict) -> bool:
     except Exception:
         # If any error occurs, default to not allowing cancellation
         return False
+
+async def update_tiffin_statuses():
+    """
+    Automatically update tiffin statuses based on time:
+    - When cancellation time passes, update to preparing
+    - 90 min later, update to prepared
+    - 30 min later, update to out_for_delivery
+    - 1 hour later (2 hours after cancellation time), update to delivered
+    """
+    try:
+        current_time = datetime.now(IST)
+        today = current_time.strftime("%Y-%m-%d")
+        current_time_str = current_time.strftime("%H:%M")
+        
+        # Find tiffins for today that are still scheduled
+        tiffins = list(db.tiffins.find({
+            "date": today,
+            "status": {"$ne": TiffinStatus.CANCELLED}
+        }))
+        
+        for tiffin in tiffins:
+            try:
+                # Parse cancellation time
+                if "cancellation_time" not in tiffin:
+                    continue
+                    
+                cancellation_time = datetime.strptime(tiffin["cancellation_time"], "%H:%M").time()
+                cancellation_datetime = datetime.combine(current_time.date(), cancellation_time)
+                cancellation_datetime = IST.localize(cancellation_datetime)
+                
+                # Calculate status update times
+                preparing_time = cancellation_datetime
+                prepared_time = cancellation_datetime + timedelta(minutes=120)
+                out_for_delivery_time = prepared_time + timedelta(minutes=30)
+                delivered_time = out_for_delivery_time + timedelta(minutes=30)  # 3 hours after cancellation
+                
+                # Current status
+                current_status = tiffin.get("status", TiffinStatus.SCHEDULED)
+                
+                # Determine new status based on current time
+                new_status = None
+                
+                if current_time >= delivered_time and current_status != TiffinStatus.DELIVERED:
+                    new_status = TiffinStatus.DELIVERED
+                elif current_time >= out_for_delivery_time and current_status not in [TiffinStatus.OUT_FOR_DELIVERY, TiffinStatus.DELIVERED]:
+                    new_status = TiffinStatus.OUT_FOR_DELIVERY
+                elif current_time >= prepared_time and current_status not in [TiffinStatus.PREPARED, TiffinStatus.OUT_FOR_DELIVERY, TiffinStatus.DELIVERED]:
+                    new_status = TiffinStatus.PREPARED
+                elif current_time >= preparing_time and current_status not in [TiffinStatus.PREPARING, TiffinStatus.PREPARED, TiffinStatus.OUT_FOR_DELIVERY, TiffinStatus.DELIVERED]:
+                    new_status = TiffinStatus.PREPARING
+                
+                # Update status if needed
+                if new_status:
+                    db.tiffins.update_one(
+                        {"_id": tiffin["_id"]},
+                        {
+                            "$set": {
+                                "status": new_status,
+                                "updated_at": current_time
+                            }
+                        }
+                    )
+                    
+                    # Notify assigned users about status change
+                    status_display = {
+                        "scheduled": "Scheduled",
+                        "preparing": "Being Prepared",
+                        "prepared": "Prepared",
+                        "out_for_delivery": "Out for Delivery",
+                        "delivered": "Delivered",
+                        "cancelled": "Cancelled"
+                    }
+                    
+                    status_message = f"Your tiffin for {tiffin['date']} ({tiffin['time']}) is now {status_display.get(new_status, new_status)}."
+                    
+                    for user_id in tiffin["assigned_users"]:
+                        notification = {
+                            "user_id": user_id,
+                            "title": "Tiffin Status Updated",
+                            "message": status_message,
+                            "type": "info",
+                            "read": False,
+                            "created_at": current_time
+                        }
+                        db.notifications.insert_one(notification)
+                    
+                    print(f"Updated tiffin {tiffin['_id']} status to {new_status}")
+            except Exception as e:
+                print(f"Error updating tiffin {tiffin.get('_id')}: {str(e)}")
+                continue
+                
+    except Exception as e:
+        print(f"Error in update_tiffin_statuses: {str(e)}")
 
 def serialize_doc(doc):
     """Convert MongoDB document to JSON-serializable format"""
@@ -2438,11 +2532,11 @@ async def generate_invoices(
         generated_invoices = []
         
         for user in users:
-            # Get user's tiffins for the period
+            # Get user's DELIVERED tiffins for the period
             tiffins = list(db.tiffins.find({
                 "assigned_users": user["user_id"],
                 "date": {"$gte": start_date, "$lte": end_date},
-                "status": {"$ne": TiffinStatus.CANCELLED}
+                "status": TiffinStatus.DELIVERED
             }))
             
             if tiffins:
@@ -3295,6 +3389,9 @@ def setup_indexes():
     except Exception as e:
         print(f"Error setting up indexes: {str(e)}")
 
+
+scheduler = AsyncIOScheduler()
+
 # Startup Event
 @app.on_event("startup")
 async def startup_event():
@@ -3303,22 +3400,22 @@ async def startup_event():
         # Setup database indexes
         setup_indexes()
         
-        # Start background tasks
-        asyncio.create_task(cleanup_old_data_task())
-        
-        # Start keep-alive task
+        asyncio.create_task(cleanup_old_data_task()) 
         asyncio.create_task(keep_alive())
+        scheduler.add_job(update_tiffin_statuses, 'interval', minutes=10)  
+        scheduler.start()
         
         print("Application startup completed successfully")
     except Exception as e:
         print(f"Startup error: {str(e)}")
 
-# Shutdown Event
+# Update the shutdown_event function
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on application shutdown"""
     try:
-        # Close MongoDB connection
+        scheduler.shutdown()
+        
         client.close()
         print("Application shutdown completed successfully")
     except Exception as e:
