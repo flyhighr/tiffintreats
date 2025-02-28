@@ -3,10 +3,10 @@
 // ================================================
 // GLOBAL VARIABLES AND INITIALIZATION
 // ================================================
+
 let currentUser = null;
 let userRole = null;
 let apiKey = null;
-let accessToken = null; 
 const API_BASE_URL = 'https://tiffintreats-20mb.onrender.com';
 let activeNotifications = [];
 
@@ -32,21 +32,10 @@ async function apiRequest(endpoint, options = {}) {
         options.headers = {};
     }
     
-    // Get auth data from localStorage
-    const auth = JSON.parse(localStorage.getItem('tiffinTreatsAuth') || '{}');
-    const token = auth.apiKey;
-    
-    if (token) {
-        // Check if this is a JWT token (has two periods)
-        if (token.includes('.')) {
-            // Use Bearer authentication for JWT tokens
-            options.headers['Authorization'] = `Bearer ${token}`;
-            console.log(`Making ${options.method || 'GET'} request to ${endpoint} with Bearer token`);
-        } else {
-            // Use X-API-Key for regular API keys
-            options.headers['X-API-Key'] = token;
-            console.log(`Making ${options.method || 'GET'} request to ${endpoint} with API key`);
-        }
+    // Add the API key if available
+    if (apiKey) {
+        options.headers['X-API-Key'] = apiKey;
+        console.log(`Making ${options.method || 'GET'} request to ${endpoint} with API key: ${apiKey ? "Present" : "Missing"}`);
     }
     
     // Add Content-Type header for POST/PUT/PATCH requests with JSON body
@@ -65,8 +54,10 @@ async function apiRequest(endpoint, options = {}) {
         } else {
             const text = await response.text();
             try {
+                // Try to parse as JSON anyway
                 responseData = JSON.parse(text);
             } catch (e) {
+                // If it's not JSON, just use the text
                 responseData = text;
             }
         }
@@ -79,6 +70,7 @@ async function apiRequest(endpoint, options = {}) {
             if (typeof responseData === 'object') {
                 if (responseData.detail) {
                     if (Array.isArray(responseData.detail)) {
+                        // Handle Pydantic validation errors
                         errorMessage = responseData.detail[0]?.msg || 'Validation error';
                     } else {
                         errorMessage = responseData.detail;
@@ -100,53 +92,6 @@ async function apiRequest(endpoint, options = {}) {
     }
 }
 
-async function refreshAccessToken() {
-    try {
-        const refreshToken = localStorage.getItem('refreshToken');
-        if (!refreshToken) {
-            console.error("No refresh token available");
-            logout();
-            return false;
-        }
-        
-        console.log("Attempting to refresh access token");
-        
-        const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ refresh_token: refreshToken })
-        });
-        
-        if (!response.ok) {
-            console.error("Failed to refresh token, logging out");
-            logout();
-            return false;
-        }
-        
-        const data = await response.json();
-        
-        if (data.status === 'success' && data.access_token) {
-            // Update the access token
-            const auth = JSON.parse(localStorage.getItem('tiffinTreatsAuth') || '{}');
-            auth.apiKey = data.access_token;
-            localStorage.setItem('tiffinTreatsAuth', JSON.stringify(auth));
-            
-            console.log("Access token refreshed successfully");
-            return true;
-        } else {
-            console.error("Invalid refresh response", data);
-            logout();
-            return false;
-        }
-    } catch (error) {
-        console.error("Error refreshing token:", error);
-        logout();
-        return false;
-    }
-}
-
 function checkAuthentication() {
     const savedAuth = localStorage.getItem('tiffinTreatsAuth');
     
@@ -156,34 +101,23 @@ function checkAuthentication() {
             apiKey = auth.apiKey;
             userRole = auth.role;
             
-            // Make a health check with both authentication methods
-            const headers = {
-                'Authorization': `Bearer ${apiKey}`,
-                'X-API-Key': apiKey
-            };
-            
-            fetch(`${API_BASE_URL}/health`, { headers })
+            // Make a direct health check to verify API key
+            fetch(`${API_BASE_URL}/health`, {
+                headers: { 'X-API-Key': apiKey }
+            })
             .then(response => {
                 if (response.ok) {
-                    console.log("Authentication verified successfully");
+                    console.log("API key verified successfully");
                     showApp();
                     loadDashboard();
                 } else {
-                    // Try to refresh the token
-                    refreshAccessToken().then(success => {
-                        if (success) {
-                            showApp();
-                            loadDashboard();
-                        } else {
-                            localStorage.removeItem('tiffinTreatsAuth');
-                            localStorage.removeItem('refreshToken');
-                            showLogin();
-                        }
-                    });
+                    console.error("API key verification failed");
+                    localStorage.removeItem('tiffinTreatsAuth');
+                    showLogin();
                 }
             })
             .catch(error => {
-                console.error("Authentication verification error:", error);
+                console.error("API key verification error:", error);
                 showLogin();
             });
         } catch (error) {
@@ -211,19 +145,14 @@ async function login(userId, password) {
         console.log("Login response:", data);
         
         if (data.status === 'success') {
+            apiKey = data.api_key;
+            userRole = data.role;
+            
             // Save auth data
             localStorage.setItem('tiffinTreatsAuth', JSON.stringify({
-                apiKey: data.api_key,
-                role: data.role
+                apiKey: apiKey,
+                role: userRole
             }));
-            
-            // Save refresh token separately if provided
-            if (data.refresh_token) {
-                localStorage.setItem('refreshToken', data.refresh_token);
-            }
-            
-            userRole = data.role;
-            apiKey = data.api_key;
             
             // For admin, we don't need to fetch profile
             if (userRole === 'admin') {
@@ -259,9 +188,7 @@ async function login(userId, password) {
 function logout() {
     console.log("Logging out user");
     localStorage.removeItem('tiffinTreatsAuth');
-    localStorage.removeItem('refreshToken');
     apiKey = null;
-    accessToken = null;
     userRole = null;
     currentUser = null;
     showLogin();
@@ -4313,4 +4240,3 @@ function setupEventListeners() {
     setupBatchCreateTiffinForm();
 
 }
- 
