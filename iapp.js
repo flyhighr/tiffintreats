@@ -2311,6 +2311,19 @@ function setupCreateTiffinForm() {
     const createTiffinForm = document.getElementById('create-tiffin-tab');
     if (!createTiffinForm) return;
     
+    // Update the description label to indicate it's optional
+    const descriptionLabel = createTiffinForm.querySelector('label[for="tiffin-description"]');
+    if (descriptionLabel) {
+        descriptionLabel.textContent = 'Description (Optional)';
+    }
+    
+    // Remove required attribute from description textarea
+    const descriptionTextarea = document.getElementById('tiffin-description');
+    if (descriptionTextarea) {
+        descriptionTextarea.removeAttribute('required');
+        descriptionTextarea.placeholder = 'Optional description of tiffin contents';
+    }
+    
     // Remove delivery time section
     const deliveryTimeSection = createTiffinForm.querySelector('.form-group:has(#tiffin-delivery)');
     if (deliveryTimeSection) {
@@ -2328,7 +2341,6 @@ function setupCreateTiffinForm() {
         newCreateTiffinBtn.addEventListener('click', createTiffinWithoutMenuItems);
     }
 }
-
 // New function to create tiffin without menu items
 async function createTiffinWithoutMenuItems() {
     try {
@@ -2342,7 +2354,8 @@ async function createTiffinWithoutMenuItems() {
         const userSelect = document.getElementById('tiffin-users');
         const assignedUsers = Array.from(userSelect.selectedOptions).map(option => option.value);
         
-        if (!date || !time || !description || isNaN(price) || !cancellationTime) {
+        // Description is now optional, so we only check other required fields
+        if (!date || !time || isNaN(price) || !cancellationTime) {
             showNotification('Please fill in all required fields', 'error');
             return;
         }
@@ -2355,7 +2368,8 @@ async function createTiffinWithoutMenuItems() {
         const tiffin = {
             date,
             time,
-            description,
+            // Include description only if it's not empty
+            ...(description && { description }),
             price,
             cancellation_time: cancellationTime,
             assigned_users: assignedUsers,
@@ -2398,6 +2412,19 @@ function setupBatchCreateTiffinForm() {
     const batchCreateTiffinForm = document.getElementById('batch-create-tab');
     if (!batchCreateTiffinForm) return;
     
+    // Update the description label to indicate it's optional
+    const descriptionLabel = batchCreateTiffinForm.querySelector('label[for="batch-tiffin-description"]');
+    if (descriptionLabel) {
+        descriptionLabel.textContent = 'Description (Optional)';
+    }
+    
+    // Remove required attribute from description textarea
+    const descriptionTextarea = document.getElementById('batch-tiffin-description');
+    if (descriptionTextarea) {
+        descriptionTextarea.removeAttribute('required');
+        descriptionTextarea.placeholder = 'Optional description of tiffin contents';
+    }
+    
     // Remove delivery time section
     const deliveryTimeSection = batchCreateTiffinForm.querySelector('.form-group:has(#batch-tiffin-delivery)');
     if (deliveryTimeSection) {
@@ -2425,8 +2452,9 @@ async function batchCreateTiffinsWithoutMenuItems() {
         const price = parseFloat(document.getElementById('batch-tiffin-price').value);
         const cancellationTime = document.getElementById('batch-tiffin-cancellation').value;
         
-        if (!date || !time || !description || isNaN(price) || !cancellationTime) {
-            showNotification('Please fill in all tiffin details', 'error');
+        // Description is now optional
+        if (!date || !time || isNaN(price) || !cancellationTime) {
+            showNotification('Please fill in all required fields', 'error');
             return;
         }
         
@@ -2449,7 +2477,8 @@ async function batchCreateTiffinsWithoutMenuItems() {
         const baseTiffin = {
             date,
             time,
-            description,
+            // Include description only if it's not empty
+            ...(description && { description }),
             price,
             cancellation_time: cancellationTime,
             status: "scheduled"
@@ -2508,7 +2537,6 @@ async function batchCreateTiffinsWithoutMenuItems() {
         }
     }
 }
-
 async function loadUsersForSelect() {
     try {
         console.log("Loading users for select dropdowns");
