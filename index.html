@@ -332,7 +332,6 @@
                             <select id="tiffin-time-filter">
                                 <option value="">All Times</option>
                                 <option value="morning">Morning</option>
-                                <option value="afternoon">Afternoon</option>
                                 <option value="evening">Evening</option>
                             </select>
                         </div>
@@ -664,7 +663,6 @@
                                     <select id="tiffin-time" required>
                                         <option value="">Select Time</option>
                                         <option value="morning">Morning</option>
-                                        <option value="afternoon">Afternoon</option>
                                         <option value="evening">Evening</option>
                                     </select>
                                 </div>
@@ -679,20 +677,6 @@
                                 <div class="form-group">
                                     <label for="tiffin-cancellation">Cancellation Time</label>
                                     <input type="time" id="tiffin-cancellation" required>
-                                </div>
-                                <div class="form-group">
-                                    <label for="tiffin-delivery">Delivery Time</label>
-                                                                        <input type="time" id="tiffin-delivery" required>
-                                </div>
-                                <div class="form-group">
-                                    <label for="tiffin-menu-items">Menu Items</label>
-                                    <div class="menu-items-container">
-                                        <div class="menu-item-input">
-                                            <input type="text" class="menu-item" placeholder="Menu item">
-                                            <button type="button" class="add-menu-item">+</button>
-                                        </div>
-                                        <div id="menu-items-list"></div>
-                                    </div>
                                 </div>
                                 <div class="form-group">
                                     <label for="tiffin-users">Assign Users</label>
@@ -750,7 +734,6 @@
                                         <select id="batch-tiffin-time" required>
                                             <option value="">Select Time</option>
                                             <option value="morning">Morning</option>
-                                            <option value="afternoon">Afternoon</option>
                                             <option value="evening">Evening</option>
                                         </select>
                                     </div>
@@ -765,20 +748,6 @@
                                     <div class="form-group">
                                         <label for="batch-tiffin-cancellation">Cancellation Time</label>
                                         <input type="time" id="batch-tiffin-cancellation" required>
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="batch-tiffin-delivery">Delivery Time</label>
-                                        <input type="time" id="batch-tiffin-delivery" required>
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="batch-tiffin-menu-items">Menu Items</label>
-                                        <div class="menu-items-container">
-                                            <div class="menu-item-input">
-                                                <input type="text" class="batch-menu-item" placeholder="Menu item">
-                                                <button type="button" class="add-batch-menu-item">+</button>
-                                            </div>
-                                            <div id="batch-menu-items-list"></div>
-                                        </div>
                                     </div>
                                 </div>
                                 
@@ -1005,7 +974,6 @@
                     <select id="request-time" required>
                         <option value="">Select Time</option>
                         <option value="morning">Morning</option>
-                        <option value="afternoon">Afternoon</option>
                         <option value="evening">Evening</option>
                     </select>
                 </div>
@@ -1129,26 +1097,18 @@
                         </div>
                     </div>
                     
-                    <div class="tiffin-details-section">
+                    <!-- Description section - only visible for admin -->
+                    <div class="tiffin-details-section" id="tiffin-details-description-section">
                         <h3>Description</h3>
                         <p id="tiffin-details-description"></p>
                     </div>
                     
                     <div class="tiffin-details-section">
-                        <h3>Menu Items</h3>
-                        <ul id="tiffin-details-menu-items" class="menu-items-list"></ul>
-                    </div>
-                    
-                    <div class="tiffin-details-section">
-                        <h3>Delivery Information</h3>
+                        <h3>Information</h3>
                         <div class="tiffin-info-grid">
                             <div class="tiffin-info-item">
                                 <span class="info-label">Price:</span>
                                 <span id="tiffin-details-price" class="info-value">₹0</span>
-                            </div>
-                            <div class="tiffin-info-item">
-                                <span class="info-label">Delivery Time:</span>
-                                <span id="tiffin-details-delivery-time" class="info-value">00:00</span>
                             </div>
                             <div class="tiffin-info-item">
                                 <span class="info-label">Cancellation Time:</span>
@@ -1157,9 +1117,15 @@
                         </div>
                     </div>
                     
-                    <div class="tiffin-details-section">
+                    <div class="tiffin-details-section admin-only">
                         <h3>Assigned Users</h3>
                         <div id="tiffin-details-users" class="assigned-users-list"></div>
+                    </div>
+                    
+                    <!-- New cancellations section -->
+                    <div class="tiffin-details-section" id="tiffin-details-cancellations">
+                        <h3>Cancellations</h3>
+                        <p>No cancellations for this tiffin</p>
                     </div>
                     
                     <div class="tiffin-details-actions admin-only">
