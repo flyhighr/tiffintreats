@@ -159,8 +159,8 @@ async function login(userId, password) {
                 currentUser = {
                     name: "Administrator",
                     user_id: "admin",
-                    email: "admin@tiffintreats.com",
-                    address: "TiffinTreats HQ"
+                    email: "admin@tiffintreats.tech",
+                    address: "TiffinTreats Wagholi"
                 };
                 updateUserInfo();
             } else {
@@ -3810,7 +3810,7 @@ async function loadAdminInvoices(filters = {}) {
                             </button>
                             ` : ''}
                             <button class="warning-button delete-invoice-btn" data-invoice-id="${invoice._id}">
-                                Delete Invoice
+                                Delete
                             </button>
                         </div>
                     </div>
