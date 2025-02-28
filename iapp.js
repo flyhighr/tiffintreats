@@ -3471,7 +3471,7 @@ async function loadAdminInvoices(filters = {}) {
         if (filters.user_id) queryParams.push(`user_id=${encodeURIComponent(filters.user_id)}`);
         if (filters.paid !== undefined) queryParams.push(`paid=${filters.paid}`);
         if (filters.start_date) queryParams.push(`start_date=${encodeURIComponent(filters.start_date)}`);
-                if (filters.end_date) queryParams.push(`end_date=${encodeURIComponent(filters.end_date)}`);
+        if (filters.end_date) queryParams.push(`end_date=${encodeURIComponent(filters.end_date)}`);
         
         const queryString = queryParams.length > 0 ? `?${queryParams.join('&')}` : '';
         
@@ -3548,11 +3548,16 @@ async function loadAdminInvoices(filters = {}) {
                             <span>Total Amount</span>
                             <span class="invoice-card-amount">₹${invoice.total_amount.toFixed(2)}</span>
                         </div>
-                        ${!invoice.paid ? `
-                        <button class="action-button mark-paid-btn" data-invoice-id="${invoice._id}">
-                            Mark as Paid
-                        </button>
-                        ` : ''}
+                        <div class="invoice-actions">
+                            ${!invoice.paid ? `
+                            <button class="action-button mark-paid-btn" data-invoice-id="${invoice._id}">
+                                Mark as Paid
+                            </button>
+                            ` : ''}
+                            <button class="warning-button delete-invoice-btn" data-invoice-id="${invoice._id}">
+                                Delete Invoice
+                            </button>
+                        </div>
                     </div>
                 </div>
             `;
@@ -3569,6 +3574,15 @@ async function loadAdminInvoices(filters = {}) {
             });
         });
         
+        // Add event listeners to delete buttons
+        document.querySelectorAll('.delete-invoice-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const invoiceId = e.target.dataset.invoiceId;
+                deleteInvoice(invoiceId);
+            });
+        });
+        
     } catch (error) {
         console.error('Error loading admin invoices:', error);
         const invoicesList = document.getElementById('admin-invoices-list');
@@ -3582,6 +3596,37 @@ async function loadAdminInvoices(filters = {}) {
     }
 }
 
+async function deleteInvoice(invoiceId) {
+    if (!invoiceId) {
+        showNotification('Invalid invoice ID', 'error');
+        return;
+    }
+    
+    showConfirmDialog(
+        'Delete Invoice',
+        'Are you sure you want to delete this invoice? This action cannot be undone.',
+        async () => {
+            try {
+                console.log(`Deleting invoice: ${invoiceId}`);
+                
+                const result = await apiRequest(`/admin/invoices/${invoiceId}`, {
+                    method: 'DELETE'
+                });
+                
+                console.log("Delete invoice result:", result);
+                
+                showNotification('Invoice deleted successfully', 'success');
+                
+                // Reload invoices
+                loadAdminInvoices();
+                
+            } catch (error) {
+                console.error('Error deleting invoice:', error);
+                showNotification('Failed to delete invoice: ' + error.message, 'error');
+            }
+        }
+    );
+}
 async function generateInvoices() {
     try {
         const startDate = document.getElementById('invoice-start-date').value;
