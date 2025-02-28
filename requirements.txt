@@ -12,7 +12,5 @@ slowapi==0.1.8
 boto3==1.28.65
 cryptography==41.0.4
 starlette==0.27.0
+logging==0.4.9.6
 dnspython==2.4.2
-bcrypt==4.0.1
-PyJWT==2.8.0
-itsdangerous==2.1.2
