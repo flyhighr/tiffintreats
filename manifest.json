@@ -4,13 +4,16 @@
   "short_name": "TiffinTreats",
   "description": "Tiffin service dashboard for ordering and bill management",
   "start_url": "/",
-  "display": "fullscreen",
-  "display_override": ["fullscreen"],
+  "display": "standalone",
+  "display_override": [
+    "window-controls-overlay",
+    "fullscreen"
+  ],
   "background_color": "#ffffff",
   "theme_color": "#4CAF50",
   "orientation": "any",
   "launch_handler": {
-    "client_mode": "auto"
+    "client_mode": "focus-existing"
   },
   "icons": [
     {
