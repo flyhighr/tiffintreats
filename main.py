@@ -3009,15 +3009,14 @@ async def get_user_dashboard_stats(user_id: str = Depends(verify_user)):
         
         for tiffin in today_tiffins:
             if tiffin.get("status") != TiffinStatus.CANCELLED:
-                # Check if delivery_time exists and is in the right format
-                delivery_time = tiffin.get("delivery_time")
-                if delivery_time and ":" in delivery_time:
+                # Safely handle delivery_time which might be None
+                if "delivery_time" in tiffin and tiffin["delivery_time"] is not None:
                     try:
-                        delivery_hour = int(delivery_time.split(":")[0])
+                        delivery_hour = int(tiffin["delivery_time"].split(":")[0])
                         if delivery_hour > current_hour:
-                            next_delivery = delivery_time
+                            next_delivery = tiffin["delivery_time"]
                             break
-                    except (ValueError, IndexError):
+                    except (ValueError, IndexError, AttributeError):
                         continue
         
         # If no upcoming delivery today, find the next day's first delivery
@@ -3029,9 +3028,9 @@ async def get_user_dashboard_stats(user_id: str = Depends(verify_user)):
             }, sort=[("date", 1), ("time", 1)])
             
             if next_day_tiffin:
-                delivery_time = next_day_tiffin.get("delivery_time", "")
-                if delivery_time:
-                    next_delivery = f"{next_day_tiffin['date']} {delivery_time}"
+                # Safely handle the case where delivery_time might be None
+                if "delivery_time" in next_day_tiffin and next_day_tiffin["delivery_time"] is not None:
+                    next_delivery = f"{next_day_tiffin['date']} {next_day_tiffin['delivery_time']}"
                 else:
                     # If no delivery time, just show the date and time of day
                     next_delivery = f"{next_day_tiffin['date']} ({next_day_tiffin.get('time', 'unknown')})"
@@ -3083,12 +3082,12 @@ async def get_user_dashboard_stats(user_id: str = Depends(verify_user)):
         
         return stats
     except Exception as e:
-        print(f"Error in dashboard stats: {str(e)}")  # Log the actual error
+        print(f"Error in dashboard stats: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch dashboard stats: {str(e)}"
         )
-
+        
 # System Management
 @app.get("/admin/system-health")
 async def check_system_health(_: bool = Depends(verify_admin)):
