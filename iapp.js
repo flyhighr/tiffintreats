@@ -37,9 +37,16 @@ async function apiRequest(endpoint, options = {}) {
     const token = auth.apiKey;
     
     if (token) {
-        // Add the token in both ways to ensure compatibility with the backend
-        options.headers['Authorization'] = `Bearer ${token}`;
-        options.headers['X-API-Key'] = token;
+        // Check if this is a JWT token (has two periods)
+        if (token.includes('.')) {
+            // Use Bearer authentication for JWT tokens
+            options.headers['Authorization'] = `Bearer ${token}`;
+            console.log(`Making ${options.method || 'GET'} request to ${endpoint} with Bearer token`);
+        } else {
+            // Use X-API-Key for regular API keys
+            options.headers['X-API-Key'] = token;
+            console.log(`Making ${options.method || 'GET'} request to ${endpoint} with API key`);
+        }
     }
     
     // Add Content-Type header for POST/PUT/PATCH requests with JSON body
