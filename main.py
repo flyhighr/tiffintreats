@@ -2523,7 +2523,7 @@ async def update_notice(
         update_data = {k: sanitize_input(v) if isinstance(v, str) else v 
                       for k, v in updates.items() if k in allowed_updates}
         
-                if not update_data:
+        if not update_data:
             raise HTTPException(
                 status_code=400,
                 detail="No valid updates provided"
