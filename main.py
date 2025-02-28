@@ -50,9 +50,8 @@ api_key_header = APIKeyHeader(name="X-API-Key")
 # Enums
 class TiffinTime(str, Enum):
     MORNING = "morning"
-    AFTERNOON = "afternoon"
     EVENING = "evening"
-
+    
 class TiffinStatus(str, Enum):
     SCHEDULED = "scheduled"
     PREPARING = "preparing"
@@ -2132,7 +2131,54 @@ async def get_all_polls(_: bool = Depends(verify_admin)):
             status_code=500,
             detail=f"Failed to fetch polls: {str(e)}"
         )
-
+        
+@app.get("/admin/polls/{poll_id}/votes")
+async def get_poll_votes(
+    poll_id: str,
+    _: bool = Depends(verify_admin)
+):
+    try:
+        if not is_valid_object_id(poll_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid poll ID format"
+            )
+        
+        # Get the poll to verify it exists
+        poll = db.polls.find_one({"_id": ObjectId(poll_id)})
+        if not poll:
+            raise HTTPException(
+                status_code=404,
+                detail="Poll not found"
+            )
+        
+        # Get all votes for this poll
+        votes = list(db.poll_votes.find({"poll_id": ObjectId(poll_id)}))
+        
+        # Get user details for each vote
+        detailed_votes = []
+        for vote in votes:
+            user = db.users.find_one({"user_id": vote["user_id"]}, {"name": 1, "user_id": 1})
+            detailed_vote = {
+                "user_id": vote["user_id"],
+                "user_name": user["name"] if user else "Unknown User",
+                "option_index": vote["option_index"],
+                "voted_at": vote["voted_at"]
+            }
+            detailed_votes.append(detailed_vote)
+        
+        return {
+            "poll_id": poll_id,
+            "votes": detailed_votes
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch poll votes: {str(e)}"
+        )
+        
 @app.get("/user/polls")
 async def get_active_polls(user_id: str = Depends(verify_user)):
     try:
