@@ -458,9 +458,14 @@ def decode_token(token: str):
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
         return payload
     except jwt.ExpiredSignatureError:
+        logger.warning("Token has expired")
         raise HTTPException(status_code=401, detail="Token has expired")
-    except jwt.InvalidTokenError:
+    except jwt.InvalidTokenError as e:
+        logger.warning(f"Invalid token: {str(e)}")
         raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        logger.error(f"Unexpected error decoding token: {str(e)}")
+        raise HTTPException(status_code=401, detail="Error validating credentials")
 
 async def verify_admin(api_key: str = Depends(api_key_header)):
     """Enhanced admin verification with rate limiting"""
@@ -473,14 +478,34 @@ async def verify_admin(api_key: str = Depends(api_key_header)):
         )
     return True
 
-async def verify_user(api_key: str = Depends(api_key_header)):
-    """Enhanced user verification with rate limiting and token validation"""
+async def verify_user(api_key: str = Depends(api_key_header), authorization: str = Header(None)):
+    """Enhanced user verification supporting both API keys and JWT tokens"""
+    # If Authorization header is provided, try to use it first
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.replace("Bearer ", "")
+        try:
+            payload = decode_token(token)
+            user_id = payload.get("user_id")
+            
+            # Verify the user exists and is active
+            user = db.users.find_one({"user_id": user_id})
+            if not user:
+                raise HTTPException(status_code=401, detail="User not found")
+                
+            if not user.get("active", True):
+                raise HTTPException(status_code=403, detail="User account is inactive")
+                
+            return user_id
+        except HTTPException:
+            # If token validation fails, fall through to API key check
+            pass
+    
     # Check if it's admin first
     if api_key == ADMIN_API_KEY:
         return ADMIN_ID
     
     # For backward compatibility, check if this is a JWT token
-    if api_key.count('.') == 2:  # Simple check for JWT format (header.payload.signature)
+    if api_key and api_key.count('.') == 2:  # Simple check for JWT format
         try:
             payload = decode_token(api_key)
             user_id = payload.get("user_id")
