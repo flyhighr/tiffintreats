@@ -147,7 +147,7 @@ class TiffinRequestApproval(BaseModel):
     date: str
     time: TiffinTime
     price: float
-    delivery_time: str
+    delivery_time: Optional[str] = None 
     cancellation_time: str
     menu_items: Optional[List[str]] = None
 
@@ -1800,7 +1800,7 @@ async def approve_tiffin_request(
             "description": request["description"],
             "price": approval.price,
             "cancellation_time": approval.cancellation_time,
-            "delivery_time": approval.delivery_time,
+            "delivery_time": approval.delivery_time if approval.delivery_time else "12:00",
             "status": TiffinStatus.SCHEDULED,
             "menu_items": approval.menu_items or ["Special Tiffin"],
             "assigned_users": [request["user_id"]],
