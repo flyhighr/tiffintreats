@@ -1588,13 +1588,23 @@ async function changePassword() {
             return;
         }
         
-        await apiRequest('/user/password', {
+        // Update these parameter names to match the API's expected field names
+        const response = await fetch(`${API_BASE_URL}/user/password`, {
             method: 'PUT',
+            headers: {
+                'X-API-Key': apiKey,
+                'Content-Type': 'application/json'
+            },
             body: JSON.stringify({
-                old_password: currentPassword,
-                new_password: newPassword
+                old_password: currentPassword,  // This must match the API's parameter name
+                new_password: newPassword       // This must match the API's parameter name
             })
         });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Failed to change password');
+        }
         
         // Clear password fields
         document.getElementById('current-password').value = '';
@@ -1607,7 +1617,6 @@ async function changePassword() {
         showNotification('Failed to change password: ' + error.message, 'error');
     }
 }
-
 async function loadProfileStats() {
     try {
         // For admin, we don't need to fetch stats
