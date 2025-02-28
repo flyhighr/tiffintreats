@@ -1746,12 +1746,19 @@ async function loadNotifications() {
 
 async function markNotificationRead(notificationId) {
     try {
-        await apiRequest('/user/notifications/mark-read', {
+        const response = await fetch(`${API_BASE_URL}/user/notifications/mark-read`, {
             method: 'POST',
-            body: JSON.stringify({
-                notification_ids: [notificationId]
-            })
+            headers: {
+                'X-API-Key': apiKey,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify([notificationId])  // Send as array directly, not as an object property
         });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Failed to mark notification as read');
+        }
         
         // Update UI
         const notificationItem = document.querySelector(`.notification-item[data-id="${notificationId}"]`);
@@ -1768,6 +1775,7 @@ async function markNotificationRead(notificationId) {
         
     } catch (error) {
         console.error('Error marking notification as read:', error);
+        showNotification('Failed to mark notification as read: ' + error.message, 'error');
     }
 }
 
