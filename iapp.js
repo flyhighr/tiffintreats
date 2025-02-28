@@ -487,7 +487,7 @@ async function loadTodayTiffin() {
     try {
         console.log("Loading today's tiffin");
         
-        // Since the specific endpoint is giving an error, let's use the general endpoint with today's date
+        // Use a more reliable approach - get today's date and query with it
         const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
         const response = await apiRequest(`/user/tiffins?date=${today}`);
         
@@ -496,7 +496,7 @@ async function loadTodayTiffin() {
         // The API returns data in a paginated format
         const tiffins = response.data || [];
         
-                console.log(`Loaded ${tiffins.length} tiffins for today`);
+        console.log(`Loaded ${tiffins.length} tiffins for today`);
         
         const todayTiffinStatus = document.getElementById('today-tiffin-status');
         const nextDeliveryTime = document.getElementById('next-delivery-time');
@@ -516,11 +516,13 @@ async function loadTodayTiffin() {
         const now = new Date();
         const currentHour = now.getHours();
         
+        // Sort by time (morning first, evening second)
         tiffins.sort((a, b) => {
             const timeA = a.time === 'morning' ? 0 : 1; // morning = 0, evening = 1
             const timeB = b.time === 'morning' ? 0 : 1; // morning = 0, evening = 1
             return timeA - timeB;
         });
+        
         // Get the first non-cancelled tiffin
         const nextTiffin = tiffins.find(tiffin => tiffin.status !== 'cancelled');
         
@@ -548,6 +550,7 @@ async function loadTodayTiffin() {
     }
 }
 
+// Fix loadUpcomingTiffins to handle the endpoint correctly
 async function loadUpcomingTiffins() {
     try {
         console.log("Loading upcoming tiffins");
@@ -566,15 +569,24 @@ async function loadUpcomingTiffins() {
             </div>
         `;
         
-        // Get upcoming tiffins from API endpoint
-        const response = await apiRequest('/user/tiffins/upcoming?days=14');
+        // Get today's date and next few days
+        const today = new Date().toISOString().split('T')[0];
+        const nextWeek = new Date();
+        nextWeek.setDate(nextWeek.getDate() + 7);
+        const nextWeekStr = nextWeek.toISOString().split('T')[0];
         
-        console.log("Upcoming tiffins response:", response);
+        // Use the regular tiffins endpoint with date filtering instead
+        const response = await apiRequest(`/user/tiffins?date=${today}`);
         
-        // The API returns an array of tiffins
-        const upcomingTiffins = response || [];
+        // The API returns data in a paginated format
+        const tiffins = response.data || [];
         
-        console.log(`Found ${upcomingTiffins.length} upcoming tiffins`);
+        // Filter to include only future tiffins (today and later)
+        const upcomingTiffins = tiffins.filter(tiffin => 
+            tiffin.date >= today && tiffin.status !== 'cancelled'
+        );
+        
+        console.log(`Found ${upcomingTiffins.length} upcoming tiffins after filtering`);
         
         if (upcomingTiffins.length === 0) {
             upcomingTiffinsElement.innerHTML = `
@@ -715,6 +727,7 @@ async function loadUpcomingTiffins() {
         document.getElementById('month-tiffin-count').textContent = '0 tiffins';
     }
 }
+
 // ================================================
 // TIFFINS PAGE FUNCTIONS
 // ================================================
@@ -4052,20 +4065,21 @@ function formatDate(dateString) {
     }
 }
 
-function formatTime(timeStr) {
-    if (!timeStr) return 'N/A';
+function formatTiffinStatus(status) {
+    if (!status) return 'Unknown';
     
-    try {
-        const [hours, minutes] = timeStr.split(':');
-        const hour = parseInt(hours);
-        const ampm = hour >= 12 ? 'PM' : 'AM';
-        const formattedHour = hour % 12 || 12;
-        return `${formattedHour}:${minutes} ${ampm}`;
-    } catch (error) {
-        console.error('Error formatting time:', error);
-        return timeStr || 'N/A';
-    }
+    const statusMap = {
+        'scheduled': 'Scheduled',
+        'preparing': 'Preparing',
+        'prepared': 'Prepared',
+        'out_for_delivery': 'Out for Delivery',
+        'delivered': 'Delivered',
+        'cancelled': 'Cancelled'
+    };
+    
+    return statusMap[status] || status;
 }
+
 
 // Fix the time formatting function to correctly handle evening time slots
 function formatTiffinTime(timeStr) {
