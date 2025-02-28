@@ -94,6 +94,7 @@ class TiffinBase(BaseModel):
     description: Optional[str] = None
     price: float
     cancellation_time: str
+    delivery_time: Optional[str] = None
     status: TiffinStatus = TiffinStatus.SCHEDULED
 
 class TiffinCreate(TiffinBase):
@@ -742,7 +743,6 @@ async def create_tiffin(tiffin: TiffinCreate, _: bool = Depends(verify_admin)):
             status_code=500,
             detail=f"Failed to create tiffin: {str(e)}"
         )
-
 @app.post("/admin/batch-tiffins")
 async def create_batch_tiffins(
     base_tiffin: TiffinBase,
@@ -753,7 +753,9 @@ async def create_batch_tiffins(
         # Validate time formats in base_tiffin
         try:
             datetime.strptime(base_tiffin.cancellation_time, "%H:%M")
-            datetime.strptime(base_tiffin.delivery_time, "%H:%M")
+            # Only validate delivery_time if it's provided
+            if base_tiffin.delivery_time:
+                datetime.strptime(base_tiffin.delivery_time, "%H:%M")
             datetime.strptime(base_tiffin.date, "%Y-%m-%d")
         except ValueError:
             raise HTTPException(
@@ -1786,7 +1788,9 @@ async def approve_tiffin_request(
         try:
             datetime.strptime(approval.date, "%Y-%m-%d")
             datetime.strptime(approval.cancellation_time, "%H:%M")
-            datetime.strptime(approval.delivery_time, "%H:%M")
+            # Only validate delivery_time if it's provided
+            if approval.delivery_time:
+                datetime.strptime(approval.delivery_time, "%H:%M")
         except ValueError:
             raise HTTPException(
                 status_code=400,
@@ -1800,7 +1804,8 @@ async def approve_tiffin_request(
             "description": request["description"],
             "price": approval.price,
             "cancellation_time": approval.cancellation_time,
-            "delivery_time": approval.delivery_time if approval.delivery_time else "12:00",
+            # Set a default delivery time if not provided
+            "delivery_time": approval.delivery_time or "12:00",
             "status": TiffinStatus.SCHEDULED,
             "menu_items": approval.menu_items or ["Special Tiffin"],
             "assigned_users": [request["user_id"]],
@@ -1846,6 +1851,7 @@ async def approve_tiffin_request(
             status_code=500,
             detail=f"Failed to approve tiffin request: {str(e)}"
         )
+        
 @app.post("/admin/tiffin-requests/{request_id}/reject")
 async def reject_tiffin_request(
     request_id: str,
