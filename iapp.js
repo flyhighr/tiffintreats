@@ -1588,17 +1588,12 @@ async function changePassword() {
             return;
         }
         
-        // Update these parameter names to match the API's expected field names
-        const response = await fetch(`${API_BASE_URL}/user/password`, {
+        // Update to use query parameters instead of JSON body
+        const response = await fetch(`${API_BASE_URL}/user/password?old_password=${encodeURIComponent(currentPassword)}&new_password=${encodeURIComponent(newPassword)}`, {
             method: 'PUT',
             headers: {
-                'X-API-Key': apiKey,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                old_password: currentPassword,  // This must match the API's parameter name
-                new_password: newPassword       // This must match the API's parameter name
-            })
+                'X-API-Key': apiKey
+            }
         });
         
         if (!response.ok) {
@@ -1617,6 +1612,7 @@ async function changePassword() {
         showNotification('Failed to change password: ' + error.message, 'error');
     }
 }
+
 async function loadProfileStats() {
     try {
         // For admin, we don't need to fetch stats
