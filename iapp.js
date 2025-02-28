@@ -558,21 +558,23 @@ async function loadUpcomingTiffins() {
             return;
         }
         
-        // Get today's date
-        const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
-        const response = await apiRequest(`/user/tiffins?date=${today}`);
+        // Show loading state
+        upcomingTiffinsElement.innerHTML = `
+            <div class="loading-state">
+                <span class="spinner"></span>
+                <p>Loading upcoming tiffins...</p>
+            </div>
+        `;
+        
+        // Get upcoming tiffins from API endpoint
+        const response = await apiRequest('/user/tiffins/upcoming?days=14');
         
         console.log("Upcoming tiffins response:", response);
         
-        // The API returns data in a paginated format
-        const tiffins = response.data || [];
+        // The API returns an array of tiffins
+        const upcomingTiffins = response || [];
         
-        // Filter to include only future tiffins (today and later)
-        const upcomingTiffins = tiffins.filter(tiffin => {
-            return tiffin.date >= today && tiffin.status !== 'cancelled';
-        });
-        
-        console.log(`Found ${upcomingTiffins.length} upcoming tiffins after filtering`);
+        console.log(`Found ${upcomingTiffins.length} upcoming tiffins`);
         
         if (upcomingTiffins.length === 0) {
             upcomingTiffinsElement.innerHTML = `
@@ -584,7 +586,7 @@ async function loadUpcomingTiffins() {
             return;
         }
         
-        // Sort by date (ascending)
+        // Sort by date (ascending) and time
         upcomingTiffins.sort((a, b) => {
             if (a.date !== b.date) {
                 return a.date.localeCompare(b.date);
@@ -593,19 +595,30 @@ async function loadUpcomingTiffins() {
             const timeOrder = { 'morning': 0, 'evening': 1 };
             return timeOrder[a.time] - timeOrder[b.time];
         });
+        
         let tiffinsHTML = '';
         
         // Limit to next 6 tiffins
         const nextTiffins = upcomingTiffins.slice(0, 6);
         
-        nextTiffins.forEach(tiffin => {
+        for (const tiffin of nextTiffins) {
             // Skip if tiffin doesn't have required properties
             if (!tiffin._id || !tiffin.time || !tiffin.status || !tiffin.date) {
                 console.warn('Skipping invalid tiffin:', tiffin);
-                return;
+                continue;
             }
             
             const statusClass = `status-${tiffin.status}`;
+            const isCancellable = checkIfCancellable(tiffin);
+            
+            // Format the date with day name
+            const tiffinDate = new Date(tiffin.date);
+            const formattedDate = tiffinDate.toLocaleDateString(undefined, {
+                weekday: 'short',
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric'
+            });
             
             tiffinsHTML += `
                 <div class="tiffin-card" data-tiffin-id="${tiffin._id}">
@@ -614,7 +627,7 @@ async function loadUpcomingTiffins() {
                         <span class="tiffin-status ${statusClass}">${formatTiffinStatus(tiffin.status)}</span>
                     </div>
                     <div class="tiffin-body">
-                        <div class="tiffin-date">${formatDate(tiffin.date)}</div>
+                        <div class="tiffin-date">${formattedDate}</div>
                         ${userRole === 'admin' && tiffin.description ? 
                             `<div class="tiffin-description">${tiffin.description}</div>` : ''}
                         <div class="tiffin-meta">
@@ -622,12 +635,15 @@ async function loadUpcomingTiffins() {
                             <span class="tiffin-price">₹${(tiffin.price || 0).toFixed(2)}</span>
                         </div>
                         <div class="tiffin-actions">
-                            <button class="cancel-tiffin-btn secondary-button" data-tiffin-id="${tiffin._id}">Cancel</button>
+                            ${isCancellable ? 
+                                `<button class="cancel-tiffin-btn secondary-button" data-tiffin-id="${tiffin._id}">Cancel</button>` : 
+                                `<button class="view-details-btn secondary-button" data-tiffin-id="${tiffin._id}">View Details</button>`
+                            }
                         </div>
                     </div>
                 </div>
             `;
-        });
+        }
         
         if (tiffinsHTML === '') {
             upcomingTiffinsElement.innerHTML = `
@@ -644,7 +660,8 @@ async function loadUpcomingTiffins() {
         // Add event listeners to tiffin cards
         document.querySelectorAll('.tiffin-card').forEach(card => {
             card.addEventListener('click', (e) => {
-                if (!e.target.classList.contains('cancel-tiffin-btn')) {
+                if (!e.target.classList.contains('cancel-tiffin-btn') && 
+                    !e.target.classList.contains('view-details-btn')) {
                     const tiffinId = e.currentTarget.dataset.tiffinId;
                     if (tiffinId) {
                         showTiffinDetails(tiffinId);
@@ -659,6 +676,15 @@ async function loadUpcomingTiffins() {
                 e.stopPropagation();
                 const tiffinId = e.target.dataset.tiffinId;
                 cancelTiffin(tiffinId);
+            });
+        });
+        
+        // Add event listeners to view details buttons
+        document.querySelectorAll('.view-details-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const tiffinId = e.target.dataset.tiffinId;
+                showTiffinDetails(tiffinId);
             });
         });
         
@@ -689,7 +715,6 @@ async function loadUpcomingTiffins() {
         document.getElementById('month-tiffin-count').textContent = '0 tiffins';
     }
 }
-
 // ================================================
 // TIFFINS PAGE FUNCTIONS
 // ================================================
@@ -721,6 +746,11 @@ async function loadTiffins() {
 function displayTiffins(tiffins, filters = {}) {
     const tiffinsList = document.getElementById('tiffins-list');
     
+    if (!tiffinsList) {
+        console.error("Tiffins list element not found");
+        return;
+    }
+    
     // Apply filters
     let filteredTiffins = tiffins;
     
@@ -743,7 +773,8 @@ function displayTiffins(tiffins, filters = {}) {
         if (dateA.getTime() !== dateB.getTime()) {
             return dateB - dateA;
         }
-        return a.cancellation_time.localeCompare(b.cancellation_time);
+        // If same date, morning comes before evening
+        return a.time === 'morning' ? -1 : 1;
     });
     
     if (filteredTiffins.length === 0) {
@@ -760,6 +791,7 @@ function displayTiffins(tiffins, filters = {}) {
     
     filteredTiffins.forEach(tiffin => {
         const statusClass = `status-${tiffin.status}`;
+        const isCancellable = checkIfCancellable(tiffin);
         
         tiffinsHTML += `
             <div class="tiffin-card" data-tiffin-id="${tiffin._id}">
@@ -776,7 +808,10 @@ function displayTiffins(tiffins, filters = {}) {
                         <span class="tiffin-price">₹${(tiffin.price || 0).toFixed(2)}</span>
                     </div>
                     <div class="tiffin-actions">
-                        <button class="cancel-tiffin-btn secondary-button" data-tiffin-id="${tiffin._id}">Cancel</button>
+                        ${isCancellable && tiffin.status !== 'cancelled' ? 
+                            `<button class="cancel-tiffin-btn secondary-button" data-tiffin-id="${tiffin._id}">Cancel</button>` : 
+                            `<button class="view-details-btn secondary-button" data-tiffin-id="${tiffin._id}">View Details</button>`
+                        }
                     </div>
                 </div>
             </div>
@@ -788,7 +823,8 @@ function displayTiffins(tiffins, filters = {}) {
     // Add event listeners to tiffin cards
     document.querySelectorAll('.tiffin-card').forEach(card => {
         card.addEventListener('click', (e) => {
-            if (!e.target.classList.contains('cancel-tiffin-btn')) {
+            if (!e.target.classList.contains('cancel-tiffin-btn') && 
+                !e.target.classList.contains('view-details-btn')) {
                 const tiffinId = e.currentTarget.dataset.tiffinId;
                 showTiffinDetails(tiffinId);
             }
@@ -803,6 +839,46 @@ function displayTiffins(tiffins, filters = {}) {
             cancelTiffin(tiffinId);
         });
     });
+    
+    // Add event listeners to view details buttons
+    document.querySelectorAll('.view-details-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const tiffinId = e.target.dataset.tiffinId;
+            showTiffinDetails(tiffinId);
+        });
+    });
+}
+function checkIfCancellable(tiffin) {
+    if (!tiffin || tiffin.status === 'delivered' || tiffin.status === 'cancelled') {
+        return false;
+    }
+    
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        const tiffinDate = tiffin.date;
+        
+        // If tiffin date is in the future, allow cancellation
+        if (tiffinDate > today) {
+            return true;
+        }
+        
+        // If tiffin is today, check cancellation time
+        if (tiffinDate === today) {
+            const now = new Date();
+            const [hours, minutes] = (tiffin.cancellation_time || '00:00').split(':');
+            const cancellationTime = new Date();
+            cancellationTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+            
+            return now < cancellationTime;
+        }
+        
+        // If tiffin date is in the past, don't allow cancellation
+        return false;
+    } catch (error) {
+        console.error('Error checking if tiffin is cancellable:', error);
+        return false;
+    }
 }
 
 async function showTiffinDetails(tiffinId) {
@@ -844,12 +920,22 @@ async function showTiffinDetails(tiffinId) {
             usersContainer.innerHTML = '';
             
             if (userRole === 'admin' && tiffin.assigned_users && tiffin.assigned_users.length > 0) {
-                tiffin.assigned_users.forEach(userId => {
-                    const userDiv = document.createElement('div');
-                                        userDiv.className = 'assigned-user';
-                    userDiv.textContent = userId;
-                    usersContainer.appendChild(userDiv);
-                });
+                // Get user details for each assigned user
+                for (const userId of tiffin.assigned_users) {
+                    try {
+                        const userDetails = await apiRequest(`/admin/users/${userId}`);
+                        const userDiv = document.createElement('div');
+                        userDiv.className = 'assigned-user';
+                        userDiv.textContent = userDetails.name ? `${userDetails.name} (${userId})` : userId;
+                        usersContainer.appendChild(userDiv);
+                    } catch (error) {
+                        console.warn(`Couldn't fetch details for user ${userId}:`, error);
+                        const userDiv = document.createElement('div');
+                        userDiv.className = 'assigned-user';
+                        userDiv.textContent = userId;
+                        usersContainer.appendChild(userDiv);
+                    }
+                }
             } else if (userRole === 'admin') {
                 usersContainer.innerHTML = '<div class="empty-message">No users assigned</div>';
             } else {
@@ -881,21 +967,29 @@ async function showTiffinDetails(tiffinId) {
                 } else {
                     // Check if past cancellation time
                     const today = new Date().toISOString().split('T')[0];
-                    const isTodayOrFuture = tiffin.date >= today;
+                    const tiffinDate = new Date(tiffin.date);
+                    const now = new Date();
                     
-                    if (isTodayOrFuture) {
-                        const now = new Date();
-                        const cancellationTime = new Date(`${tiffin.date}T${tiffin.cancellation_time || '00:00'}`);
+                    // If tiffin date is in the future, allow cancellation
+                    if (tiffin.date > today) {
+                        cancelBtn.style.display = 'block';
+                        cancelBtn.onclick = () => cancelTiffin(tiffin._id);
+                    } 
+                    // If tiffin is today, check cancellation time
+                    else if (tiffin.date === today) {
+                        const [hours, minutes] = tiffin.cancellation_time.split(':');
+                        const cancellationTime = new Date();
+                        cancellationTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
                         
-                        if (now > cancellationTime) {
-                            cancelBtn.style.display = 'none';
-                        } else {
+                        if (now < cancellationTime) {
                             cancelBtn.style.display = 'block';
-                            
-                            // Add event listener to cancel button
                             cancelBtn.onclick = () => cancelTiffin(tiffin._id);
+                        } else {
+                            cancelBtn.style.display = 'none';
                         }
-                    } else {
+                    } 
+                    // If tiffin date is in the past, don't allow cancellation
+                    else {
                         cancelBtn.style.display = 'none';
                     }
                 }
@@ -1871,11 +1965,23 @@ async function loadPendingRequests() {
         
         let requestsHTML = '';
         
-        requests.forEach(request => {
+        // For each request, fetch the user details
+        for (const request of requests) {
+            // Try to get user details
+            let userName = request.user_id;
+            try {
+                const userDetails = await apiRequest(`/admin/users/${request.user_id}`);
+                if (userDetails && userDetails.name) {
+                    userName = userDetails.name;
+                }
+            } catch (error) {
+                console.warn(`Couldn't fetch details for user ${request.user_id}:`, error);
+            }
+            
             requestsHTML += `
                 <div class="request-card">
                     <div class="request-header">
-                        <span>Request from ${request.user_id}</span>
+                        <span>Request from ${userName} (${request.user_id})</span>
                         <span class="request-date">${formatDate(request.created_at)}</span>
                     </div>
                     <div class="request-body">
@@ -1902,7 +2008,7 @@ async function loadPendingRequests() {
                     </div>
                 </div>
             `;
-        });
+        }
         
         requestsList.innerHTML = requestsHTML;
         
@@ -2342,7 +2448,7 @@ function setupCreateTiffinForm() {
     }
 }
 // New function to create tiffin without menu items
-async function createTiffinWithoutMenuItems() {
+function createTiffinWithoutMenuItems() {
     try {
         const date = document.getElementById('tiffin-date').value;
         const time = document.getElementById('tiffin-time').value;
@@ -2365,47 +2471,80 @@ async function createTiffinWithoutMenuItems() {
             return;
         }
         
+        // Set appropriate cancellation time based on the time slot if not specified
+        let finalCancellationTime = cancellationTime;
+        if (!cancellationTime) {
+            finalCancellationTime = time === 'morning' ? '07:00' : '17:00';
+        }
+        
         const tiffin = {
             date,
             time,
             // Include description only if it's not empty
             ...(description && { description }),
             price,
-            cancellation_time: cancellationTime,
+            cancellation_time: finalCancellationTime,
             assigned_users: assignedUsers,
             status: "scheduled"
         };
         
-        await apiRequest('/admin/tiffins', {
+        // Show loading state
+        const createBtn = document.getElementById('create-tiffin-btn');
+        if (createBtn) {
+            createBtn.disabled = true;
+            createBtn.innerHTML = '<span class="spinner"></span> Creating...';
+        }
+        
+        apiRequest('/admin/tiffins', {
             method: 'POST',
             body: JSON.stringify(tiffin)
+        })
+        .then(result => {
+            showNotification('Tiffin created successfully', 'success');
+            
+            // Clear form
+            document.getElementById('tiffin-date').value = '';
+            document.getElementById('tiffin-time').value = '';
+            document.getElementById('tiffin-description').value = '';
+            document.getElementById('tiffin-price').value = '';
+            document.getElementById('tiffin-cancellation').value = '';
+            
+            // Deselect all users
+            Array.from(userSelect.options).forEach(option => {
+                option.selected = false;
+            });
+            
+            // Switch to manage tab
+            document.querySelector('.tab-btn[data-tab="manage-tiffin"]').click();
+            
+            // Reload tiffins
+            loadExistingTiffins();
+        })
+        .catch(error => {
+            console.error('Error creating tiffin:', error);
+            showNotification(error.message, 'error');
+        })
+        .finally(() => {
+            // Reset button state
+            if (createBtn) {
+                createBtn.disabled = false;
+                createBtn.textContent = 'Create Tiffin';
+            }
         });
-        
-        showNotification('Tiffin created successfully', 'success');
-        
-        // Clear form
-        document.getElementById('tiffin-date').value = '';
-        document.getElementById('tiffin-time').value = '';
-        document.getElementById('tiffin-description').value = '';
-        document.getElementById('tiffin-price').value = '';
-        document.getElementById('tiffin-cancellation').value = '';
-        
-        // Deselect all users
-        Array.from(userSelect.options).forEach(option => {
-            option.selected = false;
-        });
-        
-        // Switch to manage tab
-        document.querySelector('.tab-btn[data-tab="manage-tiffin"]').click();
-        
-        // Reload tiffins
-        loadExistingTiffins();
         
     } catch (error) {
         console.error('Error creating tiffin:', error);
         showNotification(error.message, 'error');
+        
+        // Reset button state
+        const createBtn = document.getElementById('create-tiffin-btn');
+        if (createBtn) {
+            createBtn.disabled = false;
+            createBtn.textContent = 'Create Tiffin';
+        }
     }
 }
+
 
 function setupBatchCreateTiffinForm() {
     // Get the batch create tiffin form
@@ -2444,7 +2583,7 @@ function setupBatchCreateTiffinForm() {
 }
 
 // New function to batch create tiffins without menu items
-async function batchCreateTiffinsWithoutMenuItems() {
+function batchCreateTiffinsWithoutMenuItems() {
     try {
         const date = document.getElementById('batch-tiffin-date').value;
         const time = document.getElementById('batch-tiffin-time').value;
@@ -2474,13 +2613,19 @@ async function batchCreateTiffinsWithoutMenuItems() {
             return;
         }
         
+        // Set appropriate cancellation time based on the time slot if not specified
+        let finalCancellationTime = cancellationTime;
+        if (!cancellationTime) {
+            finalCancellationTime = time === 'morning' ? '07:00' : '17:00';
+        }
+        
         const baseTiffin = {
             date,
             time,
             // Include description only if it's not empty
             ...(description && { description }),
             price,
-            cancellation_time: cancellationTime,
+            cancellation_time: finalCancellationTime,
             status: "scheduled"
         };
         
@@ -2490,7 +2635,7 @@ async function batchCreateTiffinsWithoutMenuItems() {
         batchCreateBtn.innerHTML = '<span class="spinner"></span> Creating...';
         
         // Make the API request
-        const response = await fetch(`${API_BASE_URL}/admin/batch-tiffins`, {
+        fetch(`${API_BASE_URL}/admin/batch-tiffins`, {
             method: 'POST',
             headers: {
                 'X-API-Key': apiKey,
@@ -2500,35 +2645,48 @@ async function batchCreateTiffinsWithoutMenuItems() {
                 base_tiffin: baseTiffin,
                 user_groups: userGroups
             })
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.json().then(data => {
+                    throw new Error(data.detail || 'Failed to create batch tiffins');
+                });
+            }
+            return response.json();
+        })
+        .then(result => {
+            showNotification('Batch tiffins created successfully', 'success');
+            
+            // Reset form and UI elements
+            document.getElementById('batch-tiffin-date').value = '';
+            document.getElementById('batch-tiffin-time').value = '';
+            document.getElementById('batch-tiffin-description').value = '';
+            document.getElementById('batch-tiffin-price').value = '';
+            document.getElementById('batch-tiffin-cancellation').value = '';
+            
+            // Reset user groups
+            resetUserGroups();
+            
+            // Switch to manage tab
+            document.querySelector('.tab-btn[data-tab="manage-tiffin"]').click();
+            
+            // Reload tiffins
+            loadExistingTiffins();
+        })
+        .catch(error => {
+            console.error('Error creating batch tiffins:', error);
+            showNotification(error.message, 'error');
+        })
+        .finally(() => {
+            // Reset button state
+            batchCreateBtn.disabled = false;
+            batchCreateBtn.textContent = 'Create Batch Tiffins';
         });
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || 'Failed to create batch tiffins');
-        }
-        
-        showNotification('Batch tiffins created successfully', 'success');
-        
-        // Reset form and UI elements
-        document.getElementById('batch-tiffin-date').value = '';
-        document.getElementById('batch-tiffin-time').value = '';
-        document.getElementById('batch-tiffin-description').value = '';
-        document.getElementById('batch-tiffin-price').value = '';
-        document.getElementById('batch-tiffin-cancellation').value = '';
-        
-        // Reset user groups
-        resetUserGroups();
-        
-        // Switch to manage tab
-        document.querySelector('.tab-btn[data-tab="manage-tiffin"]').click();
-        
-        // Reload tiffins
-        loadExistingTiffins();
         
     } catch (error) {
         console.error('Error creating batch tiffins:', error);
         showNotification(error.message, 'error');
-    } finally {
+        
         // Reset button state
         const batchCreateBtn = document.getElementById('batch-create-btn');
         if (batchCreateBtn) {
@@ -2608,6 +2766,17 @@ async function loadExistingTiffins(filters = {}) {
         
         const queryString = queryParams.length > 0 ? `?${queryParams.join('&')}` : '';
         
+        // Show loading state
+        const tiffinsList = document.getElementById('manage-tiffins-list');
+        if (tiffinsList) {
+            tiffinsList.innerHTML = `
+                <div class="loading-state">
+                    <span class="spinner"></span>
+                    <p>Loading tiffins...</p>
+                </div>
+            `;
+        }
+        
         const response = await apiRequest(`/admin/tiffins${queryString}`);
         
         console.log("Existing tiffins response:", response);
@@ -2616,7 +2785,10 @@ async function loadExistingTiffins(filters = {}) {
         const tiffins = response.data || [];
         console.log(`Loaded ${tiffins.length} existing tiffins`);
         
-        const tiffinsList = document.getElementById('manage-tiffins-list');
+        if (!tiffinsList) {
+            console.error("Tiffins list element not found");
+            return;
+        }
         
         if (tiffins.length === 0) {
             tiffinsList.innerHTML = `
@@ -2630,9 +2802,34 @@ async function loadExistingTiffins(filters = {}) {
         
         let tiffinsHTML = '';
         
-        tiffins.forEach(tiffin => {
+        // Sort by date (newest first)
+        tiffins.sort((a, b) => {
+            const dateA = new Date(a.date);
+            const dateB = new Date(b.date);
+            if (dateA.getTime() !== dateB.getTime()) {
+                return dateB - dateA;
+            }
+            // If same date, sort by time (morning first)
+            return a.time === 'morning' ? -1 : 1;
+        });
+        
+        for (const tiffin of tiffins) {
             const statusClass = `status-${tiffin.status}`;
             const assignedUsers = tiffin.assigned_users.length;
+            
+            // Get a sample of user names if possible
+            let userSample = '';
+            if (assignedUsers > 0) {
+                try {
+                    const firstUserId = tiffin.assigned_users[0];
+                    const userDetails = await apiRequest(`/admin/users/${firstUserId}`);
+                    if (userDetails && userDetails.name) {
+                        userSample = ` - ${userDetails.name}${assignedUsers > 1 ? ` +${assignedUsers-1} more` : ''}`;
+                    }
+                } catch (error) {
+                    console.warn(`Couldn't fetch user details for tiffin:`, error);
+                }
+            }
             
             tiffinsHTML += `
                 <div class="tiffin-card" data-tiffin-id="${tiffin._id}">
@@ -2644,14 +2841,14 @@ async function loadExistingTiffins(filters = {}) {
                         <div class="tiffin-date">${formatDate(tiffin.date)}</div>
                         <div class="tiffin-description">${tiffin.description || 'No description'}</div>
                         <div class="tiffin-meta">
-                            <span class="tiffin-users">Users: ${assignedUsers}</span>
+                            <span class="tiffin-users">Users: ${assignedUsers}${userSample}</span>
                             <span class="tiffin-price">₹${tiffin.price.toFixed(2)}</span>
                         </div>
                         <button class="action-button manage-tiffin-btn">Manage</button>
                     </div>
                 </div>
             `;
-        });
+        }
         
         tiffinsList.innerHTML = tiffinsHTML;
         
@@ -2666,11 +2863,14 @@ async function loadExistingTiffins(filters = {}) {
         
     } catch (error) {
         console.error('Error loading existing tiffins:', error);
-        document.getElementById('manage-tiffins-list').innerHTML = `
-            <div class="empty-state">
-                <p>Error loading tiffins: ${error.message}</p>
-            </div>
-        `;
+        const tiffinsList = document.getElementById('manage-tiffins-list');
+        if (tiffinsList) {
+            tiffinsList.innerHTML = `
+                <div class="empty-state">
+                    <p>Error loading tiffins: ${error.message}</p>
+                </div>
+            `;
+        }
     }
 }
 
@@ -2798,6 +2998,21 @@ async function showApproveRequestModal(requestId) {
         const request = await apiRequest(`/admin/tiffin-requests/${requestId}`);
         console.log("Request details loaded:", request);
         
+        // Get user name if possible
+        let userName = request.user_id;
+        try {
+            if (request.user_details && request.user_details.name) {
+                userName = request.user_details.name;
+            } else {
+                const userDetails = await apiRequest(`/admin/users/${request.user_id}`);
+                if (userDetails && userDetails.name) {
+                    userName = userDetails.name;
+                }
+            }
+        } catch (error) {
+            console.warn(`Couldn't fetch name for user ${request.user_id}:`, error);
+        }
+        
         // Create a modal dynamically
         const modal = document.createElement('div');
         modal.className = 'modal active';
@@ -2811,7 +3026,7 @@ async function showApproveRequestModal(requestId) {
                 </div>
                 <div class="modal-body">
                     <div class="form-group">
-                        <label>Request from: ${request.user_id}</label>
+                        <label>Request from: ${userName} (${request.user_id})</label>
                         <p>${request.description}</p>
                     </div>
                     <div class="form-group">
@@ -2831,7 +3046,7 @@ async function showApproveRequestModal(requestId) {
                     </div>
                     <div class="form-group">
                         <label for="approve-cancellation">Cancellation Time</label>
-                        <input type="time" id="approve-cancellation" value="08:00" required>
+                        <input type="time" id="approve-cancellation" value="${request.preferred_time === 'morning' ? '07:00' : '17:00'}" required>
                     </div>
                     <button id="submit-approval" class="action-button">Approve Request</button>
                 </div>
@@ -2885,7 +3100,6 @@ async function showApproveRequestModal(requestId) {
         showNotification(error.message, 'error');
     }
 }
-
 async function rejectRequest(requestId) {
     showConfirmDialog(
         'Reject Request',
@@ -3853,35 +4067,44 @@ function formatTime(timeStr) {
     }
 }
 
+// Fix the time formatting function to correctly handle evening time slots
 function formatTiffinTime(timeStr) {
     if (!timeStr) return 'N/A';
     
     const timeMap = {
-        'morning': 'Morning',
-        'evening': 'Evening'
+        'morning': 'Morning (8:00 AM)',
+        'evening': 'Evening (6:00 PM)'
     };
     
     return timeMap[timeStr] || timeStr;
 }
 
-function formatTiffinStatus(status) {
-    if (!status) return 'Unknown';
+// Enhanced time formatter for specific times
+function formatTime(timeStr) {
+    if (!timeStr) return 'N/A';
     
-    const statusMap = {
-        'scheduled': 'Scheduled',
-        'preparing': 'Preparing',
-        'prepared': 'Prepared',
-        'out_for_delivery': 'Out for Delivery',
-        'delivered': 'Delivered',
-        'cancelled': 'Cancelled'
-    };
-    
-    return statusMap[status] || status;
+    try {
+        const [hours, minutes] = timeStr.split(':');
+        const hour = parseInt(hours);
+        
+        // For evening tiffins, ensure we display PM for times after noon
+        const ampm = hour >= 12 ? 'PM' : 'AM';
+        const formattedHour = hour % 12 || 12;
+        return `${formattedHour}:${minutes} ${ampm}`;
+    } catch (error) {
+        console.error('Error formatting time:', error);
+        return timeStr || 'N/A';
+    }
 }
 
 function showNotification(message, type = 'info') {
     const toast = document.getElementById('notification-toast');
     const toastMessage = document.getElementById('notification-toast-message');
+    
+    if (!toast || !toastMessage) {
+        console.error("Notification elements not found");
+        return;
+    }
     
     toastMessage.textContent = message;
     
@@ -3900,6 +4123,13 @@ function showNotification(message, type = 'info') {
             toast.style.backgroundColor = 'var(--info)';
     }
     
+    // Remove active class first to restart animation if already showing
+    toast.classList.remove('active');
+    
+    // Force browser to recognize the change
+    void toast.offsetWidth;
+    
+    // Show the notification
     toast.classList.add('active');
     
     // Hide after 3 seconds
