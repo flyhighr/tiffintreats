@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Security, BackgroundTasks, Query, Request
+from fastapi import FastAPI, HTTPException, Depends, Security, BackgroundTasks, Query, Request, Header
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
