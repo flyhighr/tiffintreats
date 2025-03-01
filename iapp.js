@@ -528,8 +528,11 @@ async function loadUpcomingTiffins() {
 
         const tiffins = response.data || [];
 
+        // Filter out tiffins that are already delivered or cancelled
         const upcomingTiffins = tiffins.filter(tiffin => 
-            tiffin.date >= today && tiffin.status !== 'cancelled'
+            tiffin.date >= today && 
+            tiffin.status !== 'cancelled' && 
+            tiffin.status !== 'delivered'
         );
 
         console.log(`Found ${upcomingTiffins.length} upcoming tiffins after filtering`);
