@@ -18,8 +18,9 @@ import httpx
 import json
 import secrets
 import hashlib
+import shutil
+from pathlib import Path
 
-# Load environment variables
 load_dotenv()
 
 # Initialize FastAPI
@@ -47,6 +48,10 @@ IST = pytz.timezone('Asia/Kolkata')
 
 # Security
 api_key_header = APIKeyHeader(name="X-API-Key")
+
+BACKUP_DIR = Path("./backups")
+if not BACKUP_DIR.exists():
+    BACKUP_DIR.mkdir(parents=True
 
 # Enums
 class TiffinTime(str, Enum):
@@ -333,7 +338,7 @@ async def update_tiffin_statuses():
                 # Current status
                 current_status = tiffin.get("status", TiffinStatus.SCHEDULED)
                 
-                # Determine new status based on current time
+
                 new_status = None
                 
                 if current_time >= delivered_time and current_status != TiffinStatus.DELIVERED:
@@ -345,7 +350,6 @@ async def update_tiffin_statuses():
                 elif current_time >= preparing_time and current_status not in [TiffinStatus.PREPARING, TiffinStatus.PREPARED, TiffinStatus.OUT_FOR_DELIVERY, TiffinStatus.DELIVERED]:
                     new_status = TiffinStatus.PREPARING
                 
-                # Update status if needed
                 if new_status:
                     db.tiffins.update_one(
                         {"_id": tiffin["_id"]},
@@ -357,7 +361,6 @@ async def update_tiffin_statuses():
                         }
                     )
                     
-                    # Notify assigned users about status change
                     status_display = {
                         "scheduled": "Scheduled",
                         "preparing": "Being Prepared",
@@ -388,6 +391,68 @@ async def update_tiffin_statuses():
     except Exception as e:
         print(f"Error in update_tiffin_statuses: {str(e)}")
 
+
+async def create_database_backup():
+    """Create a complete backup of the TiffinTreats database"""
+    try:
+        backup_time = datetime.now(IST)
+        backup_id = backup_time.strftime("%Y%m%d_%H%M%S")
+        
+        collections_to_backup = [
+            "users", "tiffins", "notices", "polls", "poll_votes", 
+            "invoices", "notifications", "tiffin_requests"
+        ]
+        
+        backup_data = {
+            "backup_id": backup_id,
+            "timestamp": backup_time,
+            "collections": {}
+        }
+        
+        for collection_name in collections_to_backup:
+            collection = db[collection_name]
+            documents = list(collection.find({}))
+            
+            serialized_docs = [serialize_doc(doc) for doc in documents]
+            backup_data["collections"][collection_name] = serialized_docs
+        
+        # Add metadata
+        backup_data["metadata"] = {
+            "total_documents": sum(len(docs) for docs in backup_data["collections"].values()),
+            "backup_type": "hourly",
+            "app_version": "1.0"
+        }
+        
+        db.tt_backups.insert_one(backup_data)
+        
+        # Save local JSON backup
+        json_backup_path = BACKUP_DIR / f"tiffintreats_backup_{backup_id}.json"
+        with open(json_backup_path, 'w') as f:
+            json.dump(backup_data, f, default=str, indent=2)
+        
+        old_backups = list(db.tt_backups.find().sort("timestamp", -1).skip(48))
+        if old_backups:
+            old_backup_ids = [b["backup_id"] for b in old_backups]
+            db.tt_backups.delete_many({"backup_id": {"$in": old_backup_ids}})
+        
+        # Keep only the last 7 days of local backups
+        seven_days_ago = backup_time - timedelta(days=7)
+        for backup_file in BACKUP_DIR.glob("tiffintreats_backup_*.json"):
+            try:
+                file_date_str = backup_file.stem.split("_")[-2] 
+                file_date = datetime.strptime(file_date_str, "%Y%m%d")
+                if file_date < seven_days_ago.replace(tzinfo=None):
+                    backup_file.unlink() 
+            except (ValueError, IndexError):
+                continue 
+        
+        print(f"Database backup completed successfully: {backup_id}")
+        return {"status": "success", "backup_id": backup_id}
+    
+    except Exception as e:
+        print(f"Backup error: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
 def serialize_doc(doc):
     """Convert MongoDB document to JSON-serializable format"""
     if doc is None:
@@ -404,6 +469,38 @@ def serialize_doc(doc):
             elif isinstance(v, list):
                 doc[k] = [serialize_doc(item) for item in v]
     return doc
+
+
+async def restore_from_backup(backup_id: str):
+    """Restore database from a specific backup"""
+    try:
+        backup = db.tt_backups.find_one({"backup_id": backup_id})
+        
+        if not backup:
+            backup_file = BACKUP_DIR / f"tiffintreats_backup_{backup_id}.json"
+            if not backup_file.exists():
+                return {"status": "error", "message": "Backup not found"}
+            
+            with open(backup_file, 'r') as f:
+                backup = json.load(f)
+        
+        await create_database_backup()
+        
+        for collection_name, documents in backup["collections"].items():
+            if collection_name in db.list_collection_names():
+                db[collection_name].drop()
+            
+            if not documents:
+                continue
+                
+            db[collection_name].insert_many(documents)
+        
+        print(f"Database restored successfully from backup: {backup_id}")
+        return {"status": "success", "message": f"Database restored from backup {backup_id}"}
+    
+    except Exception as e:
+        print(f"Restore error: {str(e)}")
+        return {"status": "error", "message": str(e)}
 
 # Health Check
 @app.get("/health")
@@ -568,7 +665,7 @@ async def update_user(
     updates: Dict,
     _: bool = Depends(verify_admin)
 ):
-    # Don't allow updating admin user through this endpoint
+
     if user_id == ADMIN_ID:
         raise HTTPException(
             status_code=400,
@@ -2654,6 +2751,9 @@ async def get_all_invoices(
             detail=f"Failed to fetch invoices: {str(e)}"
         )
 
+
+
+
 @app.get("/admin/invoices/{invoice_id}")
 async def get_invoice_by_id(
     invoice_id: str,
@@ -3304,6 +3404,97 @@ async def export_data(_: bool = Depends(verify_admin)):
             detail=f"Failed to export data: {str(e)}"
         )
 
+@app.post("/admin/backups/create")
+async def trigger_backup(_: bool = Depends(verify_admin)):
+    """Manually trigger a database backup"""
+    result = await create_database_backup()
+    return result
+
+@app.get("/admin/backups")
+async def list_backups(_: bool = Depends(verify_admin)):
+    """List all available backups"""
+    try:
+        mongo_backups = list(db.tt_backups.find({}, {"_id": 0, "backup_id": 1, "timestamp": 1, "metadata": 1})
+                            .sort("timestamp", -1))
+        
+        local_backups = []
+        for backup_file in BACKUP_DIR.glob("tiffintreats_backup_*.json"):
+            try:
+                backup_id = backup_file.stem.split("_", 1)[1]
+                file_stat = backup_file.stat()
+                local_backups.append({
+                    "backup_id": backup_id,
+                    "file_path": str(backup_file),
+                    "file_size_mb": round(file_stat.st_size / (1024 * 1024), 2),
+                    "created_at": datetime.fromtimestamp(file_stat.st_ctime).isoformat()
+                })
+            except (IndexError, ValueError):
+                continue
+        
+        return {
+            "mongo_backups": [serialize_doc(b) for b in mongo_backups],
+            "local_backups": sorted(local_backups, key=lambda x: x["created_at"], reverse=True)
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list backups: {str(e)}"
+        )
+
+@app.post("/admin/backups/{backup_id}/restore")
+async def restore_backup(
+    backup_id: str,
+    confirm: bool = Query(False),
+    _: bool = Depends(verify_admin)
+):
+    """Restore database from a specific backup"""
+    if not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Restoration requires confirmation. Set confirm=true to proceed."
+        )
+    
+    result = await restore_from_backup(backup_id)
+    
+    if result["status"] == "error":
+        raise HTTPException(
+            status_code=404,
+            detail=result["message"]
+        )
+    
+    return result
+
+@app.delete("/admin/backups/{backup_id}")
+async def delete_backup(
+    backup_id: str,
+    _: bool = Depends(verify_admin)
+):
+    """Delete a specific backup"""
+    try:
+        mongo_result = db.tt_backups.delete_one({"backup_id": backup_id})
+        
+        backup_file = BACKUP_DIR / f"tiffintreats_backup_{backup_id}.json"
+        file_deleted = False
+        
+        if backup_file.exists():
+            backup_file.unlink()
+            file_deleted = True
+        
+        if mongo_result.deleted_count == 0 and not file_deleted:
+            raise HTTPException(
+                status_code=404,
+                detail="Backup not found"
+            )
+        
+        return {"status": "success", "message": f"Backup {backup_id} deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete backup: {str(e)}"
+        )
+
 # Cleanup Functions
 async def cleanup_old_data_task():
     """Cleanup old notices, polls, and other data periodically"""
@@ -3397,12 +3588,16 @@ scheduler = AsyncIOScheduler()
 async def startup_event():
     """Initialize application on startup"""
     try:
-        # Setup database indexes
         setup_indexes()
         
         asyncio.create_task(cleanup_old_data_task()) 
         asyncio.create_task(keep_alive())
-        scheduler.add_job(update_tiffin_statuses, 'interval', minutes=10)  
+        scheduler.add_job(update_tiffin_statuses, 'interval', minutes=10)
+        
+        scheduler.add_job(create_database_backup, 'interval', hours=1)
+        
+        asyncio.create_task(create_database_backup())
+        
         scheduler.start()
         
         print("Application startup completed successfully")
