@@ -51,7 +51,7 @@ api_key_header = APIKeyHeader(name="X-API-Key")
 
 BACKUP_DIR = Path("./backups")
 if not BACKUP_DIR.exists():
-    BACKUP_DIR.mkdir(parents=True
+    BACKUP_DIR.mkdir(parents=True)
 
 # Enums
 class TiffinTime(str, Enum):
