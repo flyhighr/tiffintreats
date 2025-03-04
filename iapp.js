@@ -189,7 +189,6 @@ function showLogin() {
     document.getElementById('auth-container').classList.remove('hidden');
     document.getElementById('app-container').classList.add('hidden');
 }
-
 function showApp() {
     document.getElementById('auth-container').classList.add('hidden');
     document.getElementById('app-container').classList.remove('hidden');
@@ -197,11 +196,13 @@ function showApp() {
     const adminSection = document.querySelector('.admin-section');
     if (userRole === 'admin') {
         adminSection.classList.remove('hidden');
+        // Only setup these forms if admin and after authentication
+        setupCreateTiffinForm();
+        setupBatchCreateTiffinForm();
     } else {
         adminSection.classList.add('hidden');
     }
 }
-
 function navigateTo(pageId) {
 
     document.querySelectorAll('.page').forEach(page => {
@@ -4453,8 +4454,5 @@ function setupEventListeners() {
             }
         });
     });
-
-    setupCreateTiffinForm();
-    setupBatchCreateTiffinForm();
 
 }
