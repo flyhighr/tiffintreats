@@ -2672,7 +2672,7 @@ async function loadUsersForSelect() {
     try {
         console.log("Loading users for select dropdowns");
 
-        // Use the apiRequest helper function you've defined
+        // Use the apiRequest helper function
         const response = await apiRequest('/admin/users');
         
         console.log("Users response:", response);
@@ -2713,12 +2713,13 @@ async function loadUsersForSelect() {
         });
 
         console.log("Users loaded into dropdowns successfully");
+        return true;
     } catch (error) {
         console.error('Error loading users for select:', error);
         showNotification('Failed to load users for dropdown: ' + error.message, 'error');
+        return false;
     }
 }
-
 async function loadExistingTiffins(filters = {}, page = 1, limit = 9) {
     try {
         console.log("Loading existing tiffins with filters:", filters);
