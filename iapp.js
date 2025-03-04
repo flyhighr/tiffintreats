@@ -72,7 +72,21 @@ async function apiRequest(endpoint, options = {}) {
         throw error;
     }
 }
-
+async function fetchUsersBatch(userIds) {
+    try {
+        if (!userIds || !userIds.length) return {};
+        
+        const response = await apiRequest('/admin/users/batch', {
+            method: 'POST',
+            body: JSON.stringify(userIds)
+        });
+        
+        return response.users || {};
+    } catch (error) {
+        console.error('Error fetching users batch:', error);
+        return {};
+    }
+}
 function checkAuthentication() {
     const savedAuth = localStorage.getItem('tiffinTreatsAuth');
 
@@ -668,7 +682,7 @@ async function loadUpcomingTiffins() {
     }
 }
 
-async function loadTiffins(page = 1, limit = 10) {
+async function loadTiffins(page = 1, limit = 9) {
     try {
         console.log("Loading tiffins with API key:", apiKey ? "Present" : "Missing");
 
@@ -695,7 +709,7 @@ async function loadTiffins(page = 1, limit = 10) {
     }
 }
 
-function displayTiffins(tiffins, filters = {}, currentPage = 1, limit = 10, totalItems = 0) {
+function displayTiffins(tiffins, filters = {}, currentPage = 1, limit = 9, totalItems = 0) {
     const tiffinsList = document.getElementById('tiffins-list');
 
     if (!tiffinsList) {
@@ -896,26 +910,20 @@ async function showTiffinDetails(tiffinId) {
             usersContainer.innerHTML = '';
 
             if (userRole === 'admin' && tiffin.assigned_users && tiffin.assigned_users.length > 0) {
-
+                // Fetch all users in one batch request
+                const usersBatch = await fetchUsersBatch(tiffin.assigned_users);
+                
                 for (const userId of tiffin.assigned_users) {
-                    try {
-                        const userDetails = await apiRequest(`/admin/users/${userId}`);
-                        const userDiv = document.createElement('div');
-                        userDiv.className = 'assigned-user';
-                        userDiv.textContent = userDetails.name ? `${userDetails.name} (${userId})` : userId;
-                        usersContainer.appendChild(userDiv);
-                    } catch (error) {
-                        console.warn(`Couldn't fetch details for user ${userId}:`, error);
-                        const userDiv = document.createElement('div');
-                        userDiv.className = 'assigned-user';
-                        userDiv.textContent = userId;
-                        usersContainer.appendChild(userDiv);
-                    }
+                    const userDetails = usersBatch[userId];
+                    const userDiv = document.createElement('div');
+                    userDiv.className = 'assigned-user';
+                    userDiv.textContent = userDetails && userDetails.name ? 
+                        `${userDetails.name} (${userId})` : userId;
+                    usersContainer.appendChild(userDiv);
                 }
             } else if (userRole === 'admin') {
                 usersContainer.innerHTML = '<div class="empty-message">No users assigned</div>';
             } else {
-
                 const userSection = document.querySelector('.tiffin-details-section.admin-only');
                 if (userSection) {
                     userSection.style.display = 'none';
@@ -923,6 +931,7 @@ async function showTiffinDetails(tiffinId) {
             }
         }
 
+        // Rest of the function remains the same
         const adminActions = document.querySelector('.tiffin-details-actions.admin-only');
         const userActions = document.querySelector('.tiffin-details-actions.user-only');
 
@@ -938,7 +947,6 @@ async function showTiffinDetails(tiffinId) {
                 if (tiffin.status === 'delivered' || tiffin.status === 'cancelled') {
                     cancelBtn.style.display = 'none';
                 } else {
-
                     const today = new Date().toISOString().split('T')[0];
                     const tiffinDate = new Date(tiffin.date);
                     const now = new Date();
@@ -946,9 +954,7 @@ async function showTiffinDetails(tiffinId) {
                     if (tiffin.date > today) {
                         cancelBtn.style.display = 'block';
                         cancelBtn.onclick = () => cancelTiffin(tiffin._id);
-                    } 
-
-                    else if (tiffin.date === today) {
+                    } else if (tiffin.date === today) {
                         const [hours, minutes] = tiffin.cancellation_time.split(':');
                         const cancellationTime = new Date();
                         cancellationTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
@@ -959,9 +965,7 @@ async function showTiffinDetails(tiffinId) {
                         } else {
                             cancelBtn.style.display = 'none';
                         }
-                    } 
-
-                    else {
+                    } else {
                         cancelBtn.style.display = 'none';
                     }
                 }
@@ -975,7 +979,6 @@ async function showTiffinDetails(tiffinId) {
 
             const closeBtn = modal.querySelector('.close-modal');
             if (closeBtn) {
-
                 const newCloseBtn = closeBtn.cloneNode(true);
                 closeBtn.parentNode.replaceChild(newCloseBtn, closeBtn);
 
@@ -985,7 +988,6 @@ async function showTiffinDetails(tiffinId) {
             }
 
             if (userRole === 'admin') {
-
                 setTimeout(fixTiffinStatusUpdate, 100);
             }
         }
@@ -1214,7 +1216,7 @@ async function cancelTiffin(tiffinId) {
     }
 }
 
-async function loadHistory(page = 1, limit = 20) {
+async function loadHistory(page = 1, limit = 9) {
     try {
         console.log("Loading history with API key:", apiKey ? "Present" : "Missing");
 
@@ -1242,7 +1244,7 @@ async function loadHistory(page = 1, limit = 20) {
     }
 }
 
-function displayHistory(history, filters = {}, currentPage = 1, limit = 20, totalItems = 0) {
+function displayHistory(history, filters = {}, currentPage = 1, limit = 9, totalItems = 0) {
     const historyList = document.getElementById('history-list');
 
     let filteredHistory = history;
@@ -1380,7 +1382,7 @@ function updateHistoryStats(history) {
     document.getElementById('most-ordered-time').textContent = formatTiffinTime(mostOrderedTime);
 }
 
-async function loadInvoices(page = 1, limit = 20) {
+async function loadInvoices(page = 1, limit = 9) {
     try {
         console.log("Loading invoices with API key:", apiKey ? "Present" : "Missing");
 
@@ -2026,7 +2028,7 @@ function setupQuickActionLinks() {
     });
 }
 
-async function loadManageUsers(page = 1, limit = 10, searchQuery = '') {
+async function loadManageUsers(page = 1, limit = 9, searchQuery = '') {
     if (userRole !== 'admin') return;
 
     try {
@@ -2058,7 +2060,7 @@ async function loadManageUsers(page = 1, limit = 10, searchQuery = '') {
     }
 }
 
-function displayUsers(users, searchQuery = '', currentPage = 1, limit = 10, totalItems = 0) {
+function displayUsers(users, searchQuery = '', currentPage = 1, limit = 9, totalItems = 0) {
     const usersList = document.getElementById('users-list');
 
     let filteredUsers = users;
@@ -2717,7 +2719,7 @@ async function loadUsersForSelect() {
     }
 }
 
-async function loadExistingTiffins(filters = {}, page = 1, limit = 10) {
+async function loadExistingTiffins(filters = {}, page = 1, limit = 9) {
     try {
         console.log("Loading existing tiffins with filters:", filters);
 
@@ -2766,6 +2768,17 @@ async function loadExistingTiffins(filters = {}, page = 1, limit = 10) {
             return;
         }
 
+        // Collect all unique user IDs from all tiffins
+        const allUserIds = new Set();
+        tiffins.forEach(tiffin => {
+            if (tiffin.assigned_users && tiffin.assigned_users.length > 0) {
+                allUserIds.add(tiffin.assigned_users[0]);
+            }
+        });
+        
+        // Fetch all needed users in one batch
+        const usersBatch = await fetchUsersBatch(Array.from(allUserIds));
+
         let tiffinsHTML = '';
 
         // Create tiffin cards HTML as before
@@ -2775,14 +2788,10 @@ async function loadExistingTiffins(filters = {}, page = 1, limit = 10) {
 
             let userSample = '';
             if (assignedUsers > 0) {
-                try {
-                    const firstUserId = tiffin.assigned_users[0];
-                    const userDetails = await apiRequest(`/admin/users/${firstUserId}`);
-                    if (userDetails && userDetails.name) {
-                        userSample = ` - ${userDetails.name}${assignedUsers > 1 ? ` +${assignedUsers-1} more` : ''}`;
-                    }
-                } catch (error) {
-                    console.warn(`Couldn't fetch user details for tiffin:`, error);
+                const firstUserId = tiffin.assigned_users[0];
+                const userDetails = usersBatch[firstUserId];
+                if (userDetails && userDetails.name) {
+                    userSample = ` - ${userDetails.name}${assignedUsers > 1 ? ` +${assignedUsers-1} more` : ''}`;
                 }
             }
 
@@ -3646,7 +3655,7 @@ async function loadGenerateInvoices() {
     }
 }
 
-async function loadAdminInvoices(filters = {}, page = 1, limit = 10) {
+async function loadAdminInvoices(filters = {}, page = 1, limit = 9) {
     try {
         console.log("Loading admin invoices with filters:", filters);
 
