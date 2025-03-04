@@ -2358,12 +2358,14 @@ async function loadManageTiffins() {
 
     console.log("Loading manage tiffins");
 
+    // Load users first for the select dropdowns
     await loadUsersForSelect();
 
+    // Then load existing tiffins
     loadExistingTiffins();
 
+    // Setup tabs and forms
     setupTiffinTabs();
-
     setupCreateTiffinForm();
     setupBatchCreateTiffinForm();
 }
@@ -2663,32 +2665,26 @@ function batchCreateTiffinsWithoutMenuItems() {
     }
 }
 
+// Fix the loadUsersForSelect function
 async function loadUsersForSelect() {
     try {
         console.log("Loading users for select dropdowns");
 
-        const response = await fetch(`${API_BASE_URL}/admin/users`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        });
-
-        console.log("Users for select response status:", response.status);
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Users for select error:", errorData);
-            throw new Error(errorData.detail || 'Failed to load users');
-        }
-
-        const result = await response.json();
-        const users = result.data || [];
+        // Use the apiRequest helper function you've defined
+        const response = await apiRequest('/admin/users');
+        
+        console.log("Users response:", response);
+        
+        // Handle the response structure correctly
+        const users = response.users || [];
+        
         console.log(`Loaded ${users.length} users for select`);
 
         const activeUsers = users
             .filter(user => user.active)
             .sort((a, b) => a.name.localeCompare(b.name));
 
+        // Populate the single tiffin user dropdown
         const tiffinUsers = document.getElementById('tiffin-users');
         if (tiffinUsers) {
             tiffinUsers.innerHTML = '';
@@ -2701,11 +2697,12 @@ async function loadUsersForSelect() {
             });
         }
 
+        // Populate all user group selects
         const userGroupSelects = document.querySelectorAll('.user-group-select-input');
         userGroupSelects.forEach(select => {
             select.innerHTML = '';
 
-                        activeUsers.forEach(user => {
+            activeUsers.forEach(user => {
                 const option = document.createElement('option');
                 option.value = user.user_id;
                 option.textContent = `${user.name} (${user.user_id})`;
@@ -2713,6 +2710,7 @@ async function loadUsersForSelect() {
             });
         });
 
+        console.log("Users loaded into dropdowns successfully");
     } catch (error) {
         console.error('Error loading users for select:', error);
         showNotification('Failed to load users for dropdown: ' + error.message, 'error');
@@ -2905,6 +2903,7 @@ function addUserGroup() {
         removeBtn.addEventListener('click', () => {
             container.removeChild(groupDiv);
 
+            // Renumber the remaining groups
             container.querySelectorAll('.user-group').forEach((group, index) => {
                 const groupHeading = group.querySelector('h4');
                 if (groupHeading) {
@@ -2914,37 +2913,34 @@ function addUserGroup() {
         });
     }
 
+    // Get the select element for the new group
     const select = groupDiv.querySelector('.user-group-select-input');
-    if (!select) {
-        console.error('User group select not found in new group');
-        return;
-    }
+    if (select) {
+        // Load users for this new select
+        apiRequest('/admin/users')
+            .then(response => {
+                // Handle the response structure correctly
+                const users = response.users || [];
+                
+                const activeUsers = users
+                    .filter(user => user.active)
+                    .sort((a, b) => a.name.localeCompare(b.name));
 
-    // Directly use the apiRequest function
-    apiRequest('/admin/users')
-        .then(response => {
-            const users = Array.isArray(response) ? response : 
-                          (Array.isArray(response?.users) ? response.users : []);
-                          
-            const activeUsers = users
-                .filter(user => user.active)
-                .sort((a, b) => a.name.localeCompare(b.name));
-
-            activeUsers.forEach(user => {
-                const option = document.createElement('option');
-                option.value = user.user_id;
-                option.textContent = `${user.name} (${user.user_id})`;
-                select.appendChild(option);
+                activeUsers.forEach(user => {
+                    const option = document.createElement('option');
+                    option.value = user.user_id;
+                    option.textContent = `${user.name} (${user.user_id})`;
+                    select.appendChild(option);
+                });
+            })
+            .catch(error => {
+                console.error('Error loading users for new group:', error);
+                showNotification('Failed to load users for the new group', 'error');
             });
-        })
-        .catch(error => {
-            console.error('Error loading users for group:', error);
-            showNotification('Failed to load users for group', 'error');
-        });
+    }
 }
 
 function resetUserGroups() {
-    // Update to properly initialize the first group
     const container = document.getElementById('user-groups-container');
     if (container) {
         const basePriceInput = document.getElementById('batch-tiffin-price');
@@ -2975,6 +2971,7 @@ function resetUserGroups() {
         // This will load users for the first group
         loadUsersForSelect();
 
+        // Add event listener to the "Add Another Group" button
         const addGroupBtn = document.getElementById('add-user-group');
         if (addGroupBtn) {
             addGroupBtn.addEventListener('click', addUserGroup);
