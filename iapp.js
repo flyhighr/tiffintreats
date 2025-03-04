@@ -266,7 +266,8 @@ async function loadNotices() {
     try {
         console.log("Loading notices");
 
-        const notices = await apiRequest('/user/notices');
+        const response = await apiRequest('/user/notices');
+        const notices = response.data || [];
 
         console.log(`Loaded ${notices.length} notices`);
 
@@ -316,6 +317,11 @@ async function loadNotices() {
 async function loadPolls() {
     try {
         console.log("Loading polls");
+
+        const response = await apiRequest('/user/polls');
+        const polls = response.data || [];
+
+        console.log(`Loaded ${polls.length} polls`);
 
         const polls = await apiRequest('/user/polls');
 
@@ -2677,7 +2683,8 @@ async function loadUsersForSelect() {
             throw new Error(errorData.detail || 'Failed to load users');
         }
 
-        const users = await response.json();
+        const result = await response.json();
+        const users = result.data || [];
         console.log(`Loaded ${users.length} users for select`);
 
         const activeUsers = users
