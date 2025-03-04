@@ -323,10 +323,6 @@ async function loadPolls() {
 
         console.log(`Loaded ${polls.length} polls`);
 
-        const polls = await apiRequest('/user/polls');
-
-        console.log(`Loaded ${polls.length} polls`);
-
         const pollsContainer = document.getElementById('polls-container');
 
         if (polls.length === 0) {
