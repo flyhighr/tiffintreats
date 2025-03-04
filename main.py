@@ -183,6 +183,10 @@ class UserStats(BaseModel):
     current_month_tiffins: int
     favorite_time: Optional[str] = None
 
+class BatchTiffinGroup(BaseModel):
+    users: List[str]
+    price: float
+
 # Helper Functions for MongoDB ObjectId handling
 class PyObjectId(ObjectId):
     @classmethod
@@ -636,12 +640,28 @@ async def create_user(user: UserCreate, _: bool = Depends(verify_admin)):
         )
 
 @app.get("/admin/users")
-async def get_all_users(_: bool = Depends(verify_admin)):
+async def get_all_users(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    _: bool = Depends(verify_admin)
+):
     try:
-        users = list(db.users.find({}, {"password": 0, "api_key": 0}))
+        # Get total count for pagination
+        total_users = db.users.count_documents({})
+        
+        # Get users with pagination
+        users = list(db.users.find({}, {"password": 0, "api_key": 0}).skip(skip).limit(limit))
+        
+        # Serialize users
         for user in users:
             user["_id"] = str(user["_id"])
-        return users
+            
+        return {
+            "total": total_users,
+            "skip": skip,
+            "limit": limit,
+            "users": users
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -933,10 +953,12 @@ async def create_tiffin(tiffin: TiffinCreate, _: bool = Depends(verify_admin)):
             status_code=500,
             detail=f"Failed to create tiffin: {str(e)}"
         )
+
+# Updated batch tiffins endpoint to support different prices for different groups
 @app.post("/admin/batch-tiffins")
 async def create_batch_tiffins(
     base_tiffin: TiffinBase,
-    user_groups: List[List[str]],
+    user_groups: List[BatchTiffinGroup],
     _: bool = Depends(verify_admin)
 ):
     try:
@@ -953,32 +975,35 @@ async def create_batch_tiffins(
                 detail="Invalid date or time format. Use YYYY-MM-DD for date and HH:MM for times"
             )
         
-        for user_group in user_groups:
+        created_tiffins = []
+        
+        for group in user_groups:
             # Skip empty groups
-            if not user_group:
+            if not group.users:
                 continue
                 
             # Validate all users in group
-            for user_id in user_group:
+            for user_id in group.users:
                 if not db.users.find_one({"user_id": user_id, "active": True}):
                     raise HTTPException(
                         status_code=400,
                         detail=f"User {user_id} not found or inactive"
                     )
             
-            # Create tiffin for this group
+            # Create tiffin for this group with its specific price
             tiffin_dict = base_tiffin.dict()
             tiffin_dict.update({
-                "assigned_users": user_group,
+                "assigned_users": group.users,
+                "price": group.price,  # Use the group-specific price
                 "created_at": datetime.now(IST),
                 "updated_at": datetime.now(IST)
             })
             
             result = db.tiffins.insert_one(tiffin_dict)
-            tiffin_id = str(result.inserted_id)
+            created_tiffins.append(str(result.inserted_id))
             
             # Create notifications for assigned users
-            for user_id in user_group:
+            for user_id in group.users:
                 notification = {
                     "user_id": user_id,
                     "title": "New Tiffin Scheduled",
@@ -991,7 +1016,8 @@ async def create_batch_tiffins(
         
         return {
             "status": "success",
-            "message": f"Created tiffins for {len(user_groups)} user groups"
+            "message": f"Created {len(created_tiffins)} tiffins for {len(user_groups)} user groups",
+            "tiffin_ids": created_tiffins
         }
     except HTTPException:
         raise
@@ -1007,7 +1033,7 @@ async def get_all_tiffins(
     status: Optional[TiffinStatus] = None,
     time: Optional[TiffinTime] = None,
     user_id: Optional[str] = None,
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(20, ge=1, le=100),
     skip: int = Query(0, ge=0),
     _: bool = Depends(verify_admin)
 ):
@@ -1455,7 +1481,7 @@ async def get_user_tiffins(
     date: Optional[str] = None,
     time: Optional[TiffinTime] = None,
     status: Optional[TiffinStatus] = None,
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(20, ge=1, le=100),
     skip: int = Query(0, ge=0)
 ):
     try:
@@ -1630,7 +1656,9 @@ async def get_user_today_tiffins(user_id: str = Depends(verify_user)):
 @app.get("/user/tiffins/upcoming")
 async def get_user_upcoming_tiffins(
     user_id: str = Depends(verify_user),
-    days: int = Query(7, ge=1, le=30)
+    days: int = Query(7, ge=1, le=30),
+    limit: int = Query(20, ge=1, le=100),
+    skip: int = Query(0, ge=0)
 ):
     try:
         today = datetime.now(IST).strftime("%Y-%m-%d")
@@ -1642,7 +1670,11 @@ async def get_user_upcoming_tiffins(
             "status": {"$ne": TiffinStatus.CANCELLED}
         }
         
-        tiffins = list(db.tiffins.find(query).sort("date", 1).sort("time", 1))
+        # Get total count for pagination
+        total_count = db.tiffins.count_documents(query)
+        
+        # Get tiffins with pagination
+        tiffins = list(db.tiffins.find(query).sort("date", 1).sort("time", 1).skip(skip).limit(limit))
         
         # Properly serialize the tiffins
         serialized_tiffins = []
@@ -1650,7 +1682,12 @@ async def get_user_upcoming_tiffins(
             serialized_tiffin = serialize_doc(tiffin)  # Using the serialize_doc function
             serialized_tiffins.append(serialized_tiffin)
             
-        return serialized_tiffins
+        return {
+            "total": total_count,
+            "skip": skip,
+            "limit": limit,
+            "data": serialized_tiffins
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -1768,7 +1805,7 @@ async def get_user_history(
     user_id: str = Depends(verify_user),
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(20, ge=1, le=100),
     skip: int = Query(0, ge=0)
 ):
     try:
@@ -1885,6 +1922,8 @@ async def request_special_tiffin(
 async def get_tiffin_requests(
     status: Optional[RequestStatus] = None,
     user_id: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=100),
+    skip: int = Query(0, ge=0),
     _: bool = Depends(verify_admin)
 ):
     try:
@@ -1896,13 +1935,22 @@ async def get_tiffin_requests(
         if user_id:
             query["user_id"] = user_id
         
-        requests = list(db.tiffin_requests.find(query).sort("created_at", -1))
+        # Get total count for pagination
+        total_count = db.tiffin_requests.count_documents(query)
+        
+        # Get requests with pagination
+        requests = list(db.tiffin_requests.find(query).sort("created_at", -1).skip(skip).limit(limit))
         
         # Serialize requests
         for request in requests:
             request["_id"] = str(request["_id"])
             
-        return requests
+        return {
+            "total": total_count,
+            "skip": skip,
+            "limit": limit,
+            "data": requests
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -2145,12 +2193,28 @@ async def create_notice(notice: Notice, _: bool = Depends(verify_admin)):
         )
 
 @app.get("/admin/notices")
-async def get_all_notices(_: bool = Depends(verify_admin)):
+async def get_all_notices(
+    limit: int = Query(20, ge=1, le=100),
+    skip: int = Query(0, ge=0),
+    _: bool = Depends(verify_admin)
+):
     try:
-        notices = list(db.notices.find().sort("created_at", -1))
+        # Get total count for pagination
+        total_count = db.notices.count_documents({})
+        
+        # Get notices with pagination
+        notices = list(db.notices.find().sort("created_at", -1).skip(skip).limit(limit))
+        
+        # Serialize notices
         for notice in notices:
             notice["_id"] = str(notice["_id"])
-        return notices
+            
+        return {
+            "total": total_count,
+            "skip": skip,
+            "limit": limit,
+            "data": notices
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -2158,7 +2222,11 @@ async def get_all_notices(_: bool = Depends(verify_admin)):
         )
 
 @app.get("/user/notices")
-async def get_user_notices(user_id: str = Depends(verify_user)):
+async def get_user_notices(
+    user_id: str = Depends(verify_user),
+    limit: int = Query(20, ge=1, le=100),
+    skip: int = Query(0, ge=0)
+):
     try:
         current_time = datetime.now(IST)
         query = {
@@ -2168,10 +2236,22 @@ async def get_user_notices(user_id: str = Depends(verify_user)):
             ]
         }
         
-        notices = list(db.notices.find(query).sort("priority", -1).sort("created_at", -1))
+        # Get total count for pagination
+        total_count = db.notices.count_documents(query)
+        
+        # Get notices with pagination
+        notices = list(db.notices.find(query).sort("priority", -1).sort("created_at", -1).skip(skip).limit(limit))
+        
+        # Serialize notices
         for notice in notices:
             notice["_id"] = str(notice["_id"])
-        return notices
+            
+        return {
+            "total": total_count,
+            "skip": skip,
+            "limit": limit,
+            "data": notices
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -2311,12 +2391,28 @@ async def create_poll(poll: Poll, _: bool = Depends(verify_admin)):
         )
 
 @app.get("/admin/polls")
-async def get_all_polls(_: bool = Depends(verify_admin)):
+async def get_all_polls(
+    limit: int = Query(20, ge=1, le=100),
+    skip: int = Query(0, ge=0),
+    _: bool = Depends(verify_admin)
+):
     try:
-        polls = list(db.polls.find().sort("end_date", -1))
+        # Get total count for pagination
+        total_count = db.polls.count_documents({})
+        
+        # Get polls with pagination
+        polls = list(db.polls.find().sort("end_date", -1).skip(skip).limit(limit))
+        
+        # Serialize polls
         for poll in polls:
             poll["_id"] = str(poll["_id"])
-        return polls
+            
+        return {
+            "total": total_count,
+            "skip": skip,
+            "limit": limit,
+            "data": polls
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -2326,6 +2422,8 @@ async def get_all_polls(_: bool = Depends(verify_admin)):
 @app.get("/admin/polls/{poll_id}/votes")
 async def get_poll_votes(
     poll_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    skip: int = Query(0, ge=0),
     _: bool = Depends(verify_admin)
 ):
     try:
@@ -2343,8 +2441,11 @@ async def get_poll_votes(
                 detail="Poll not found"
             )
         
-        # Get all votes for this poll
-        votes = list(db.poll_votes.find({"poll_id": ObjectId(poll_id)}))
+        # Get total count for pagination
+        total_count = db.poll_votes.count_documents({"poll_id": ObjectId(poll_id)})
+        
+        # Get votes with pagination
+        votes = list(db.poll_votes.find({"poll_id": ObjectId(poll_id)}).skip(skip).limit(limit))
         
         # Get user details for each vote
         detailed_votes = []
@@ -2360,6 +2461,9 @@ async def get_poll_votes(
         
         return {
             "poll_id": poll_id,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit,
             "votes": detailed_votes
         }
     except HTTPException:
@@ -2371,7 +2475,11 @@ async def get_poll_votes(
         )
         
 @app.get("/user/polls")
-async def get_active_polls(user_id: str = Depends(verify_user)):
+async def get_active_polls(
+    user_id: str = Depends(verify_user),
+    limit: int = Query(20, ge=1, le=100),
+    skip: int = Query(0, ge=0)
+):
     try:
         current_time = datetime.now(IST)
         query = {
@@ -2380,7 +2488,11 @@ async def get_active_polls(user_id: str = Depends(verify_user)):
             "end_date": {"$gt": current_time}
         }
         
-        polls = list(db.polls.find(query))
+        # Get total count for pagination
+        total_count = db.polls.count_documents(query)
+        
+        # Get polls with pagination
+        polls = list(db.polls.find(query).skip(skip).limit(limit))
         
         # For each poll, check if user has already voted
         for poll in polls:
@@ -2401,7 +2513,12 @@ async def get_active_polls(user_id: str = Depends(verify_user)):
                 for option in poll["options"]:
                     option["votes"] = 0
         
-        return polls
+        return {
+            "total": total_count,
+            "skip": skip,
+            "limit": limit,
+            "data": polls
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -2700,6 +2817,8 @@ async def get_all_invoices(
     paid: Optional[bool] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=100),
+    skip: int = Query(0, ge=0),
     _: bool = Depends(verify_admin)
 ):
     try:
@@ -2731,7 +2850,11 @@ async def get_all_invoices(
                     detail="Invalid end_date format. Use YYYY-MM-DD"
                 )
         
-        invoices = list(db.invoices.find(query).sort("generated_at", -1))
+        # Get total count for pagination
+        total_count = db.invoices.count_documents(query)
+        
+        # Get invoices with pagination
+        invoices = list(db.invoices.find(query).sort("generated_at", -1).skip(skip).limit(limit))
         
         # Add user details to each invoice
         for invoice in invoices:
@@ -2742,7 +2865,12 @@ async def get_all_invoices(
                 user["_id"] = str(user["_id"])
                 invoice["user_details"] = user
         
-        return invoices
+        return {
+            "total": total_count,
+            "skip": skip,
+            "limit": limit,
+            "data": invoices
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -2750,9 +2878,6 @@ async def get_all_invoices(
             status_code=500,
             detail=f"Failed to fetch invoices: {str(e)}"
         )
-
-
-
 
 @app.get("/admin/invoices/{invoice_id}")
 async def get_invoice_by_id(
@@ -2805,7 +2930,9 @@ async def get_invoice_by_id(
 @app.get("/user/invoices")
 async def get_user_invoices(
     user_id: str = Depends(verify_user),
-    paid: Optional[bool] = None
+    paid: Optional[bool] = None,
+    limit: int = Query(20, ge=1, le=100),
+    skip: int = Query(0, ge=0)
 ):
     try:
         query = {}
@@ -2817,8 +2944,13 @@ async def get_user_invoices(
         if paid is not None:
             query["paid"] = paid
         
-        invoices = list(db.invoices.find(query).sort("generated_at", -1))
+        # Get total count for pagination
+        total_count = db.invoices.count_documents(query)
         
+        # Get invoices with pagination
+        invoices = list(db.invoices.find(query).sort("generated_at", -1).skip(skip).limit(limit))
+        
+        # Serialize invoices
         for invoice in invoices:
             invoice["_id"] = str(invoice["_id"])
             
@@ -2826,7 +2958,12 @@ async def get_user_invoices(
             tiffin_ids = [ObjectId(t_id) for t_id in invoice["tiffins"] if is_valid_object_id(t_id)]
             invoice["tiffin_count"] = len(tiffin_ids)
             
-        return invoices
+        return {
+            "total": total_count,
+            "skip": skip,
+            "limit": limit,
+            "data": invoices
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -2966,16 +3103,22 @@ async def delete_invoice(
 async def get_user_notifications(
     user_id: str = Depends(verify_user),
     read: Optional[bool] = None,
-    limit: int = Query(50, ge=1, le=100)
+    limit: int = Query(50, ge=1, le=100),
+    skip: int = Query(0, ge=0)
 ):
     try:
         query = {"user_id": user_id}
         
         if read is not None:
             query["read"] = read
-            
-        notifications = list(db.notifications.find(query).sort("created_at", -1).limit(limit))
         
+        # Get total count for pagination
+        total_count = db.notifications.count_documents(query)
+            
+        # Get notifications with pagination
+        notifications = list(db.notifications.find(query).sort("created_at", -1).skip(skip).limit(limit))
+        
+        # Serialize notifications
         for notification in notifications:
             notification["_id"] = str(notification["_id"])
             
@@ -2983,6 +3126,9 @@ async def get_user_notifications(
         unread_count = db.notifications.count_documents({"user_id": user_id, "read": False})
             
         return {
+            "total": total_count,
+            "skip": skip,
+            "limit": limit,
             "notifications": notifications,
             "unread_count": unread_count
         }
