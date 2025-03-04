@@ -14,7 +14,6 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function apiRequest(endpoint, options = {}) {
-
     if (!options.headers) {
         options.headers = {};
     }
@@ -39,10 +38,8 @@ async function apiRequest(endpoint, options = {}) {
         } else {
             const text = await response.text();
             try {
-
                 responseData = JSON.parse(text);
             } catch (e) {
-
                 responseData = text;
             }
         }
@@ -55,7 +52,6 @@ async function apiRequest(endpoint, options = {}) {
             if (typeof responseData === 'object') {
                 if (responseData.detail) {
                     if (Array.isArray(responseData.detail)) {
-
                         errorMessage = responseData.detail[0]?.msg || 'Validation error';
                     } else {
                         errorMessage = responseData.detail;
@@ -1922,7 +1918,11 @@ async function loadPendingRequests() {
     try {
         console.log("Loading pending requests");
 
-        const requests = await apiRequest('/admin/tiffin-requests?status=pending');
+        const response = await apiRequest('/admin/tiffin-requests?status=pending');
+        
+        // Handle different response formats
+        const requests = Array.isArray(response) ? response : 
+                        (Array.isArray(response?.data) ? response.data : []);
 
         console.log(`Loaded ${requests.length} pending requests`);
 
@@ -2516,6 +2516,7 @@ function createTiffinWithoutMenuItems() {
 }
 
 function setupBatchCreateTiffinForm() {
+    
 
     const batchCreateTiffinForm = document.getElementById('batch-create-tab');
     if (!batchCreateTiffinForm) return;
@@ -2544,6 +2545,7 @@ function setupBatchCreateTiffinForm() {
 
         newBatchCreateBtn.addEventListener('click', batchCreateTiffinsWithoutMenuItems);
     }
+    resetUserGroups();
 }
 
 function batchCreateTiffinsWithoutMenuItems() {
@@ -2918,37 +2920,31 @@ function addUserGroup() {
         return;
     }
 
-    fetch(`${API_BASE_URL}/admin/users`, {
-        headers: {
-            'X-API-Key': apiKey
-        }
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error(`Failed to fetch users: ${response.status}`);
-        }
-        return response.json();
-    })
-    .then(usersResponse => {
-        const users = usersResponse.users || usersResponse;
-        const activeUsers = users
-            .filter(user => user.active)
-            .sort((a, b) => a.name.localeCompare(b.name));
+    // Directly use the apiRequest function
+    apiRequest('/admin/users')
+        .then(response => {
+            const users = Array.isArray(response) ? response : 
+                          (Array.isArray(response?.users) ? response.users : []);
+                          
+            const activeUsers = users
+                .filter(user => user.active)
+                .sort((a, b) => a.name.localeCompare(b.name));
 
-        activeUsers.forEach(user => {
-            const option = document.createElement('option');
-            option.value = user.user_id;
-            option.textContent = `${user.name} (${user.user_id})`;
-            select.appendChild(option);
+            activeUsers.forEach(user => {
+                const option = document.createElement('option');
+                option.value = user.user_id;
+                option.textContent = `${user.name} (${user.user_id})`;
+                select.appendChild(option);
+            });
+        })
+        .catch(error => {
+            console.error('Error loading users for group:', error);
+            showNotification('Failed to load users for group', 'error');
         });
-    })
-    .catch(error => {
-        console.error('Error loading users for group:', error);
-        showNotification('Failed to load users for group', 'error');
-    });
 }
 
 function resetUserGroups() {
+    // Update to properly initialize the first group
     const container = document.getElementById('user-groups-container');
     if (container) {
         const basePriceInput = document.getElementById('batch-tiffin-price');
@@ -2976,6 +2972,7 @@ function resetUserGroups() {
             </button>
         `;
 
+        // This will load users for the first group
         loadUsersForSelect();
 
         const addGroupBtn = document.getElementById('add-user-group');
@@ -2984,6 +2981,7 @@ function resetUserGroups() {
         }
     }
 }
+
 
 async function showApproveRequestModal(requestId) {
     try {
@@ -3124,9 +3122,12 @@ async function loadAdminNotices() {
     try {
         console.log("Loading admin notices with API key:", apiKey ? "Present" : "Missing");
 
-        const notices = await apiRequest('/admin/notices');
+        const response = await apiRequest('/admin/notices');
+        console.log(`Loaded ${response?.length || 0} notices`);
 
-        console.log(`Loaded ${notices.length} notices`);
+        // Make sure we have an array to work with
+        const notices = Array.isArray(response) ? response : 
+                       (Array.isArray(response?.data) ? response.data : []);
 
         const noticesList = document.getElementById('admin-notices-list');
 
@@ -3140,9 +3141,10 @@ async function loadAdminNotices() {
             return;
         }
 
+        // Now sort the array safely
         notices.sort((a, b) => {
-            const dateA = new Date(a.created_at);
-            const dateB = new Date(b.created_at);
+            const dateA = new Date(a.created_at || 0);
+            const dateB = new Date(b.created_at || 0);
             return dateB - dateA;
         });
 
@@ -3275,9 +3277,12 @@ async function loadAdminPolls() {
     try {
         console.log("Loading admin polls with API key:", apiKey ? "Present" : "Missing");
 
-        const polls = await apiRequest('/admin/polls');
+        const response = await apiRequest('/admin/polls');
+        console.log(`Loaded ${response?.length || 0} admin polls`);
 
-        console.log(`Loaded ${polls.length} admin polls`);
+        // Make sure we have an array to work with
+        const polls = Array.isArray(response) ? response : 
+                     (Array.isArray(response?.data) ? response.data : []);
 
         const pollsList = document.getElementById('admin-polls-list');
 
@@ -3291,9 +3296,10 @@ async function loadAdminPolls() {
             return;
         }
 
+        // Now sort the array safely
         polls.sort((a, b) => {
-            const dateA = new Date(a.end_date);
-            const dateB = new Date(b.end_date);
+            const dateA = new Date(a.end_date || 0);
+            const dateB = new Date(b.end_date || 0);
             return dateA - dateB;
         });
 
