@@ -670,18 +670,22 @@ async function loadUpcomingTiffins() {
     }
 }
 
-async function loadTiffins() {
+async function loadTiffins(page = 1, limit = 10) {
     try {
         console.log("Loading tiffins with API key:", apiKey ? "Present" : "Missing");
 
-        const response = await apiRequest('/user/tiffins');
+        const queryParams = [`skip=${(page - 1) * limit}`, `limit=${limit}`];
+        const queryString = `?${queryParams.join('&')}`;
+
+        const response = await apiRequest(`/user/tiffins${queryString}`);
 
         console.log("Tiffins response:", response);
 
         const tiffins = response.data || [];
-        console.log(`Loaded ${tiffins.length} tiffins`);
+        const totalTiffins = response.total || 0;
+        console.log(`Loaded ${tiffins.length} tiffins out of ${totalTiffins} total`);
 
-        displayTiffins(tiffins);
+        displayTiffins(tiffins, {}, page, limit, totalTiffins);
 
     } catch (error) {
         console.error('Error loading tiffins:', error);
@@ -693,7 +697,7 @@ async function loadTiffins() {
     }
 }
 
-function displayTiffins(tiffins, filters = {}) {
+function displayTiffins(tiffins, filters = {}, currentPage = 1, limit = 10, totalItems = 0) {
     const tiffinsList = document.getElementById('tiffins-list');
 
     if (!tiffinsList) {
@@ -766,7 +770,35 @@ function displayTiffins(tiffins, filters = {}) {
         `;
     });
 
-    tiffinsList.innerHTML = tiffinsHTML;
+    // Add pagination controls if total count is available
+    let paginationHTML = '';
+    if (totalItems > 0) {
+        const totalPages = Math.ceil(totalItems / limit);
+        
+        if (totalPages > 1) {
+            paginationHTML = '<div class="pagination-controls">';
+            
+            if (currentPage > 1) {
+                paginationHTML += `<button class="pagination-btn" data-page="${currentPage-1}">Previous</button>`;
+            }
+            
+            // Show page numbers
+            const startPage = Math.max(1, currentPage - 2);
+            const endPage = Math.min(totalPages, currentPage + 2);
+            
+            for (let i = startPage; i <= endPage; i++) {
+                paginationHTML += `<button class="pagination-btn ${i === currentPage ? 'active' : ''}" data-page="${i}">${i}</button>`;
+            }
+            
+            if (currentPage < totalPages) {
+                paginationHTML += `<button class="pagination-btn" data-page="${currentPage+1}">Next</button>`;
+            }
+            
+            paginationHTML += '</div>';
+        }
+    }
+
+    tiffinsList.innerHTML = tiffinsHTML + paginationHTML;
 
     document.querySelectorAll('.tiffin-card').forEach(card => {
         card.addEventListener('click', (e) => {
@@ -793,7 +825,16 @@ function displayTiffins(tiffins, filters = {}) {
             showTiffinDetails(tiffinId);
         });
     });
+
+    // Add event listeners for pagination buttons
+    document.querySelectorAll('.pagination-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const pageNum = parseInt(btn.dataset.page);
+            loadTiffins(pageNum, limit);
+        });
+    });
 }
+
 function checkIfCancellable(tiffin) {
     if (!tiffin || tiffin.status === 'delivered' || tiffin.status === 'cancelled') {
         return false;
@@ -1175,18 +1216,22 @@ async function cancelTiffin(tiffinId) {
     }
 }
 
-async function loadHistory() {
+async function loadHistory(page = 1, limit = 20) {
     try {
         console.log("Loading history with API key:", apiKey ? "Present" : "Missing");
 
-        const response = await apiRequest('/user/history');
+        const queryParams = [`skip=${(page - 1) * limit}`, `limit=${limit}`];
+        const queryString = `?${queryParams.join('&')}`;
+
+        const response = await apiRequest(`/user/history${queryString}`);
 
         console.log("History response:", response);
 
         const history = response.data || [];
-        console.log(`Loaded ${history.length} history items`);
+        const totalItems = response.total || 0;
+        console.log(`Loaded ${history.length} history items out of ${totalItems} total`);
 
-        displayHistory(history);
+        displayHistory(history, {}, page, limit, totalItems);
         updateHistoryStats(history);
 
     } catch (error) {
@@ -1199,7 +1244,7 @@ async function loadHistory() {
     }
 }
 
-function displayHistory(history, filters = {}) {
+function displayHistory(history, filters = {}, currentPage = 1, limit = 20, totalItems = 0) {
     const historyList = document.getElementById('history-list');
 
     let filteredHistory = history;
@@ -1252,15 +1297,51 @@ function displayHistory(history, filters = {}) {
         `;
     });
 
-    historyList.innerHTML = historyHTML;
-
-            document.querySelectorAll('.tiffin-card').forEach(card => {
-            card.addEventListener('click', (e) => {
-                const tiffinId = e.currentTarget.dataset.tiffinId;
-                showTiffinDetails(tiffinId);
-            });
-        });
+    // Add pagination controls if total count is available
+    let paginationHTML = '';
+    if (totalItems > 0) {
+        const totalPages = Math.ceil(totalItems / limit);
+        
+        if (totalPages > 1) {
+            paginationHTML = '<div class="pagination-controls">';
+            
+            if (currentPage > 1) {
+                paginationHTML += `<button class="pagination-btn" data-page="${currentPage-1}">Previous</button>`;
+            }
+            
+            // Show page numbers
+            const startPage = Math.max(1, currentPage - 2);
+            const endPage = Math.min(totalPages, currentPage + 2);
+            
+            for (let i = startPage; i <= endPage; i++) {
+                paginationHTML += `<button class="pagination-btn ${i === currentPage ? 'active' : ''}" data-page="${i}">${i}</button>`;
+            }
+            
+            if (currentPage < totalPages) {
+                paginationHTML += `<button class="pagination-btn" data-page="${currentPage+1}">Next</button>`;
+            }
+            
+            paginationHTML += '</div>';
+        }
     }
+
+    historyList.innerHTML = historyHTML + paginationHTML;
+
+    document.querySelectorAll('.tiffin-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+            const tiffinId = e.currentTarget.dataset.tiffinId;
+            showTiffinDetails(tiffinId);
+        });
+    });
+
+    // Add event listeners for pagination buttons
+    document.querySelectorAll('.pagination-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const pageNum = parseInt(btn.dataset.page);
+            loadHistory(pageNum, limit);
+        });
+    });
+}
 
 function updateHistoryStats(history) {
     if (!Array.isArray(history)) {
@@ -1301,12 +1382,19 @@ function updateHistoryStats(history) {
     document.getElementById('most-ordered-time').textContent = formatTiffinTime(mostOrderedTime);
 }
 
-async function loadInvoices() {
+async function loadInvoices(page = 1, limit = 20) {
     try {
         console.log("Loading invoices with API key:", apiKey ? "Present" : "Missing");
 
-        const invoices = await apiRequest('/user/invoices');
-        console.log(`Loaded ${invoices.length} invoices`);
+        const queryParams = [`skip=${(page - 1) * limit}`, `limit=${limit}`];
+        const queryString = `?${queryParams.join('&')}`;
+
+        const response = await apiRequest(`/user/invoices${queryString}`);
+        console.log("Invoices response:", response);
+
+        const invoices = response.data || [];
+        const totalItems = response.total || 0;
+        console.log(`Loaded ${invoices.length} invoices out of ${totalItems} total`);
 
         const invoicesList = document.getElementById('invoices-list');
 
@@ -1365,13 +1453,49 @@ async function loadInvoices() {
             `;
         });
 
-        invoicesList.innerHTML = invoicesHTML;
+        // Add pagination controls if total count is available
+        let paginationHTML = '';
+        if (totalItems > 0) {
+            const totalPages = Math.ceil(totalItems / limit);
+            
+            if (totalPages > 1) {
+                paginationHTML = '<div class="pagination-controls">';
+                
+                if (page > 1) {
+                    paginationHTML += `<button class="pagination-btn" data-page="${page-1}">Previous</button>`;
+                }
+                
+                // Show page numbers
+                const startPage = Math.max(1, page - 2);
+                const endPage = Math.min(totalPages, page + 2);
+                
+                for (let i = startPage; i <= endPage; i++) {
+                    paginationHTML += `<button class="pagination-btn ${i === page ? 'active' : ''}" data-page="${i}">${i}</button>`;
+                }
+                
+                if (page < totalPages) {
+                    paginationHTML += `<button class="pagination-btn" data-page="${page+1}">Next</button>`;
+                }
+                
+                paginationHTML += '</div>';
+            }
+        }
+
+        invoicesList.innerHTML = invoicesHTML + paginationHTML;
 
         document.querySelectorAll('.view-invoice-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const invoiceId = e.target.dataset.invoiceId;
                 viewInvoiceDetails(invoiceId);
+            });
+        });
+
+        // Add event listeners for pagination buttons
+        document.querySelectorAll('.pagination-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const pageNum = parseInt(btn.dataset.page);
+                loadInvoices(pageNum, limit);
             });
         });
 
@@ -1900,17 +2024,27 @@ function setupQuickActionLinks() {
     });
 }
 
-async function loadManageUsers() {
+async function loadManageUsers(page = 1, limit = 10, searchQuery = '') {
     if (userRole !== 'admin') return;
 
     try {
         console.log("Loading manage users with API key:", apiKey ? "Present" : "Missing");
 
-        const users = await apiRequest('/admin/users');
+        const queryParams = [`skip=${(page - 1) * limit}`, `limit=${limit}`];
+        if (searchQuery) {
+            queryParams.push(`search=${encodeURIComponent(searchQuery)}`);
+        }
+        const queryString = `?${queryParams.join('&')}`;
 
-        console.log(`Loaded ${users.length} users`);
+        const response = await apiRequest(`/admin/users${queryString}`);
 
-        displayUsers(users);
+        console.log("Response from manage users:", response);
+        
+        const users = response.users || [];
+        const totalUsers = response.total || 0;
+        console.log(`Loaded ${users.length} users out of ${totalUsers} total`);
+
+        displayUsers(users, searchQuery, page, limit, totalUsers);
 
     } catch (error) {
         console.error('Error loading users:', error);
@@ -1922,7 +2056,7 @@ async function loadManageUsers() {
     }
 }
 
-function displayUsers(users, searchQuery = '') {
+function displayUsers(users, searchQuery = '', currentPage = 1, limit = 10, totalItems = 0) {
     const usersList = document.getElementById('users-list');
 
     let filteredUsers = users;
@@ -1978,12 +2112,48 @@ function displayUsers(users, searchQuery = '') {
         `;
     });
 
-    usersList.innerHTML = usersHTML;
+    // Add pagination controls
+    let paginationHTML = '';
+    if (totalItems > 0) {
+        const totalPages = Math.ceil(totalItems / limit);
+        
+        if (totalPages > 1) {
+            paginationHTML = '<div class="pagination-controls">';
+            
+            if (currentPage > 1) {
+                paginationHTML += `<button class="pagination-btn" data-page="${currentPage-1}">Previous</button>`;
+            }
+            
+            // Show page numbers
+            const startPage = Math.max(1, currentPage - 2);
+            const endPage = Math.min(totalPages, currentPage + 2);
+            
+            for (let i = startPage; i <= endPage; i++) {
+                paginationHTML += `<button class="pagination-btn ${i === currentPage ? 'active' : ''}" data-page="${i}">${i}</button>`;
+            }
+            
+            if (currentPage < totalPages) {
+                paginationHTML += `<button class="pagination-btn" data-page="${currentPage+1}">Next</button>`;
+            }
+            
+            paginationHTML += '</div>';
+        }
+    }
+
+    usersList.innerHTML = usersHTML + paginationHTML;
 
     document.querySelectorAll('.user-card').forEach(card => {
         card.addEventListener('click', (e) => {
             const userId = e.currentTarget.dataset.userId;
             showUserDetails(userId);
+        });
+    });
+
+    // Add event listeners for pagination buttons
+    document.querySelectorAll('.pagination-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const pageNum = parseInt(btn.dataset.page);
+            loadManageUsers(pageNum, limit, searchQuery);
         });
     });
 }
@@ -2379,21 +2549,35 @@ function batchCreateTiffinsWithoutMenuItems() {
         const date = document.getElementById('batch-tiffin-date').value;
         const time = document.getElementById('batch-tiffin-time').value;
         const description = document.getElementById('batch-tiffin-description').value.trim();
-        const price = parseFloat(document.getElementById('batch-tiffin-price').value);
+        const basePrice = parseFloat(document.getElementById('batch-tiffin-price').value);
         const cancellationTime = document.getElementById('batch-tiffin-cancellation').value;
 
-        if (!date || !time || isNaN(price) || !cancellationTime) {
+        if (!date || !time || isNaN(basePrice) || !cancellationTime) {
             showNotification('Please fill in all required fields', 'error');
             return;
         }
 
+        // Create user groups with prices
         const userGroups = [];
         document.querySelectorAll('.user-group').forEach(group => {
             const select = group.querySelector('.user-group-select-input');
             const users = Array.from(select.selectedOptions).map(option => option.value);
+            
+            // Get the group-specific price input if it exists, otherwise use the base price
+            let groupPrice = basePrice;
+            const groupPriceInput = group.querySelector('.group-price-input');
+            if (groupPriceInput) {
+                const inputPrice = parseFloat(groupPriceInput.value);
+                if (!isNaN(inputPrice)) {
+                    groupPrice = inputPrice;
+                }
+            }
 
             if (users.length > 0) {
-                userGroups.push(users);
+                userGroups.push({
+                    users: users,
+                    price: groupPrice
+                });
             }
         });
 
@@ -2410,9 +2594,8 @@ function batchCreateTiffinsWithoutMenuItems() {
         const baseTiffin = {
             date,
             time,
-
             ...(description && { description }),
-            price,
+            price: basePrice, // This is now just the default price
             cancellation_time: finalCancellationTime,
             status: "scheduled"
         };
@@ -2441,7 +2624,7 @@ function batchCreateTiffinsWithoutMenuItems() {
             return response.json();
         })
         .then(result => {
-            showNotification('Batch tiffins created successfully', 'success');
+            showNotification(`Batch tiffins created successfully: ${result.message}`, 'success');
 
             document.getElementById('batch-tiffin-date').value = '';
             document.getElementById('batch-tiffin-time').value = '';
@@ -2460,7 +2643,6 @@ function batchCreateTiffinsWithoutMenuItems() {
             showNotification(error.message, 'error');
         })
         .finally(() => {
-
             batchCreateBtn.disabled = false;
             batchCreateBtn.textContent = 'Create Batch Tiffins';
         });
@@ -2476,6 +2658,7 @@ function batchCreateTiffinsWithoutMenuItems() {
         }
     }
 }
+
 async function loadUsersForSelect() {
     try {
         console.log("Loading users for select dropdowns");
@@ -2531,7 +2714,7 @@ async function loadUsersForSelect() {
     }
 }
 
-async function loadExistingTiffins(filters = {}) {
+async function loadExistingTiffins(filters = {}, page = 1, limit = 10) {
     try {
         console.log("Loading existing tiffins with filters:", filters);
 
@@ -2540,6 +2723,10 @@ async function loadExistingTiffins(filters = {}) {
         if (filters.status) queryParams.push(`status=${filters.status}`);
         if (filters.time) queryParams.push(`time=${filters.time}`);
         if (filters.user_id) queryParams.push(`user_id=${filters.user_id}`);
+        
+        // Add pagination parameters
+        queryParams.push(`skip=${(page - 1) * limit}`);
+        queryParams.push(`limit=${limit}`);
 
         const queryString = queryParams.length > 0 ? `?${queryParams.join('&')}` : '';
 
@@ -2558,7 +2745,8 @@ async function loadExistingTiffins(filters = {}) {
         console.log("Existing tiffins response:", response);
 
         const tiffins = response.data || [];
-        console.log(`Loaded ${tiffins.length} existing tiffins`);
+        const totalTiffins = response.total || 0;
+        console.log(`Loaded ${tiffins.length} existing tiffins out of ${totalTiffins} total`);
 
         if (!tiffinsList) {
             console.error("Tiffins list element not found");
@@ -2577,16 +2765,7 @@ async function loadExistingTiffins(filters = {}) {
 
         let tiffinsHTML = '';
 
-        tiffins.sort((a, b) => {
-            const dateA = new Date(a.date);
-            const dateB = new Date(b.date);
-            if (dateA.getTime() !== dateB.getTime()) {
-                return dateB - dateA;
-            }
-
-            return a.time === 'morning' ? -1 : 1;
-        });
-
+        // Create tiffin cards HTML as before
         for (const tiffin of tiffins) {
             const statusClass = `status-${tiffin.status}`;
             const assignedUsers = tiffin.assigned_users.length;
@@ -2623,13 +2802,48 @@ async function loadExistingTiffins(filters = {}) {
             `;
         }
 
-        tiffinsList.innerHTML = tiffinsHTML;
+        // Add pagination controls
+        const totalPages = Math.ceil(totalTiffins / limit);
+        let paginationHTML = '';
+        
+        if (totalPages > 1) {
+            paginationHTML = '<div class="pagination-controls">';
+            
+            if (page > 1) {
+                paginationHTML += `<button class="pagination-btn" data-page="${page-1}">Previous</button>`;
+            }
+            
+            // Show page numbers
+            const startPage = Math.max(1, page - 2);
+            const endPage = Math.min(totalPages, page + 2);
+            
+            for (let i = startPage; i <= endPage; i++) {
+                paginationHTML += `<button class="pagination-btn ${i === page ? 'active' : ''}" data-page="${i}">${i}</button>`;
+            }
+            
+            if (page < totalPages) {
+                paginationHTML += `<button class="pagination-btn" data-page="${page+1}">Next</button>`;
+            }
+            
+            paginationHTML += '</div>';
+        }
 
+        tiffinsList.innerHTML = tiffinsHTML + paginationHTML;
+
+        // Add event listeners for manage buttons
         document.querySelectorAll('.manage-tiffin-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const tiffinId = e.target.closest('.tiffin-card').dataset.tiffinId;
                 showTiffinDetails(tiffinId);
+            });
+        });
+
+        // Add event listeners for pagination buttons
+        document.querySelectorAll('.pagination-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const pageNum = parseInt(btn.dataset.page);
+                loadExistingTiffins(filters, pageNum, limit);
             });
         });
 
@@ -2660,6 +2874,8 @@ function addUserGroup() {
     }
 
     const groupCount = container.querySelectorAll('.user-group').length + 1;
+    const basePriceInput = document.getElementById('batch-tiffin-price');
+    const basePrice = basePriceInput ? basePriceInput.value : '';
 
     const groupDiv = document.createElement('div');
     groupDiv.className = 'user-group';
@@ -2669,6 +2885,10 @@ function addUserGroup() {
             <select class="user-group-select-input" multiple>
                 <!-- Users will be loaded here -->
             </select>
+        </div>
+        <div class="form-group">
+            <label for="group-${groupCount}-price">Price for this group (₹)</label>
+            <input type="number" class="group-price-input" id="group-${groupCount}-price" value="${basePrice}" min="0" step="0.01">
         </div>
         <button type="button" class="secondary-button remove-group-btn">Remove Group</button>
     `;
@@ -2706,8 +2926,8 @@ function addUserGroup() {
         }
         return response.json();
     })
-    .then(users => {
-
+    .then(usersResponse => {
+        const users = usersResponse.users || usersResponse;
         const activeUsers = users
             .filter(user => user.active)
             .sort((a, b) => a.name.localeCompare(b.name));
@@ -2728,6 +2948,9 @@ function addUserGroup() {
 function resetUserGroups() {
     const container = document.getElementById('user-groups-container');
     if (container) {
+        const basePriceInput = document.getElementById('batch-tiffin-price');
+        const basePrice = basePriceInput ? basePriceInput.value : '';
+        
         container.innerHTML = `
             <div class="user-group">
                 <h4>Group 1</h4>
@@ -2735,6 +2958,10 @@ function resetUserGroups() {
                     <select class="user-group-select-input" multiple>
                         <!-- Users will be loaded here -->
                     </select>
+                </div>
+                <div class="form-group">
+                    <label for="group-1-price">Price for this group (₹)</label>
+                    <input type="number" class="group-price-input" id="group-1-price" value="${basePrice}" min="0" step="0.01">
                 </div>
             </div>
             <button id="add-user-group" class="secondary-button">
@@ -3413,7 +3640,7 @@ async function loadGenerateInvoices() {
     }
 }
 
-async function loadAdminInvoices(filters = {}) {
+async function loadAdminInvoices(filters = {}, page = 1, limit = 10) {
     try {
         console.log("Loading admin invoices with filters:", filters);
 
@@ -3432,6 +3659,10 @@ async function loadAdminInvoices(filters = {}) {
         if (filters.paid !== undefined) queryParams.push(`paid=${filters.paid}`);
         if (filters.start_date) queryParams.push(`start_date=${encodeURIComponent(filters.start_date)}`);
         if (filters.end_date) queryParams.push(`end_date=${encodeURIComponent(filters.end_date)}`);
+        
+        // Add pagination parameters
+        queryParams.push(`skip=${(page - 1) * limit}`);
+        queryParams.push(`limit=${limit}`);
 
         const queryString = queryParams.length > 0 ? `?${queryParams.join('&')}` : '';
 
@@ -3447,8 +3678,11 @@ async function loadAdminInvoices(filters = {}) {
             throw new Error(errorData.detail || 'Failed to load invoices');
         }
 
-        const invoices = await response.json();
-        console.log("Admin invoices loaded:", invoices);
+        const result = await response.json();
+        console.log("Admin invoices loaded:", result);
+        
+        const invoices = result.data || [];
+        const totalItems = result.total || 0;
 
         if (!invoicesList) {
             console.error("Admin invoices list element not found");
@@ -3521,7 +3755,35 @@ async function loadAdminInvoices(filters = {}) {
             `;
         });
 
-        invoicesList.innerHTML = invoicesHTML;
+        // Add pagination controls
+        let paginationHTML = '';
+        if (totalItems > 0) {
+            const totalPages = Math.ceil(totalItems / limit);
+            
+            if (totalPages > 1) {
+                paginationHTML = '<div class="pagination-controls">';
+                
+                if (page > 1) {
+                    paginationHTML += `<button class="pagination-btn" data-page="${page-1}">Previous</button>`;
+                }
+                
+                // Show page numbers
+                const startPage = Math.max(1, page - 2);
+                const endPage = Math.min(totalPages, page + 2);
+                
+                for (let i = startPage; i <= endPage; i++) {
+                    paginationHTML += `<button class="pagination-btn ${i === page ? 'active' : ''}" data-page="${i}">${i}</button>`;
+                }
+                
+                if (page < totalPages) {
+                    paginationHTML += `<button class="pagination-btn" data-page="${page+1}">Next</button>`;
+                }
+                
+                paginationHTML += '</div>';
+            }
+        }
+
+        invoicesList.innerHTML = invoicesHTML + paginationHTML;
 
         document.querySelectorAll('.mark-paid-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -3536,6 +3798,14 @@ async function loadAdminInvoices(filters = {}) {
                 e.stopPropagation();
                 const invoiceId = e.target.dataset.invoiceId;
                 deleteInvoice(invoiceId);
+            });
+        });
+
+        // Add event listeners for pagination buttons
+        document.querySelectorAll('.pagination-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const pageNum = parseInt(btn.dataset.page);
+                loadAdminInvoices(filters, pageNum, limit);
             });
         });
 
@@ -4110,25 +4380,11 @@ function setupEventListeners() {
     document.getElementById('submit-poll').addEventListener('click', createPoll);
 
     document.getElementById('generate-invoices-btn').addEventListener('click', generateInvoices);
-
     document.getElementById('user-search').addEventListener('input', (e) => {
         const searchQuery = e.target.value.trim();
-
-        fetch(`${API_BASE_URL}/admin/users`, {
-            headers: {
-                'X-API-Key': apiKey
-            }
-        })
-        .then(response => response.json())
-        .then(users => {
-            displayUsers(users, searchQuery);
-        })
-        .catch(error => {
-            console.error('Error searching users:', error);
-            showNotification('Failed to search users', 'error');
-        });
+        loadManageUsers(1, 10, searchQuery);  // Use loadManageUsers with pagination and search
     });
-
+    
     document.getElementById('add-user-btn').addEventListener('click', () => {
         document.getElementById('add-user-modal').classList.add('active');
     });
