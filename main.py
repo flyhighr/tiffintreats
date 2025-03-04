@@ -1993,7 +1993,27 @@ async def get_tiffin_request(
             status_code=500,
             detail=f"Failed to fetch tiffin request: {str(e)}"
         )
-
+        
+@app.post("/admin/users/batch")
+async def get_users_batch(
+    user_ids: List[str],
+    _: bool = Depends(verify_admin)
+):
+    try:
+        users = {}
+        for user_id in user_ids:
+            user = db.users.find_one({"user_id": user_id}, {"password": 0, "api_key": 0})
+            if user:
+                user["_id"] = str(user["_id"])
+                users[user_id] = user
+        
+        return {"users": users}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch users: {str(e)}"
+        )
+        
 @app.post("/admin/tiffin-requests/{request_id}/approve")
 async def approve_tiffin_request(
     request_id: str,
