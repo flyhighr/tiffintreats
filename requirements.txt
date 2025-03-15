@@ -14,4 +14,5 @@ cryptography==41.0.4
 starlette==0.27.0
 logging==0.4.9.6
 dnspython==2.4.2
-apscheduler
+apscheduler==3.10.4
+motor==3.3.1
