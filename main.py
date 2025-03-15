@@ -5,8 +5,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime, timedelta
-from pymongo import MongoClient, ASCENDING
+from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ASCENDING
+from pymongo.errors import PyMongoError
 from pymongo.server_api import ServerApi
+from pymongo.collection import Collection
+from pymongo.results import InsertOneResult, UpdateResult, DeleteResult
+from pymongo.operations import UpdateOne
 import os
 from dotenv import load_dotenv
 import uvicorn
@@ -35,10 +40,22 @@ app.add_middleware(
     allow_headers=["*", "X-API-Key"],
 )
 
-# MongoDB Connection
+# MongoDB Connection with optimized pool settings
 MONGODB_URL = os.getenv("MONGODB_URL")
-client = MongoClient(MONGODB_URL, server_api=ServerApi('1'))
+client = AsyncIOMotorClient(
+    MONGODB_URL,
+    server_api=ServerApi('1'),
+    maxPoolSize=50,
+    minPoolSize=10,
+    maxIdleTimeMS=30000
+)
 db = client.tiffintreats
+
+# HTTP Client for external requests
+http_client = httpx.AsyncClient(
+    timeout=10.0,
+    limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+)
 
 # Constants
 ADMIN_ID = os.getenv("ADMIN_ID", "admin")
@@ -203,6 +220,29 @@ class PyObjectId(ObjectId):
     def __modify_schema__(cls, field_schema):
         field_schema.update(type="string")
 
+# Optimized Serialization Function
+def serialize_doc(doc):
+    """Convert MongoDB document to JSON-serializable format"""
+    if doc is None:
+        return None
+        
+    result = {}
+    for k, v in doc.items():
+        if isinstance(v, ObjectId):
+            result[k] = str(v)
+        elif isinstance(v, datetime):
+            result[k] = v.isoformat()
+        elif isinstance(v, dict):
+            result[k] = serialize_doc(v)
+        elif isinstance(v, list):
+            result[k] = [serialize_doc(item) if isinstance(item, dict) else 
+                         str(item) if isinstance(item, ObjectId) else
+                         item.isoformat() if isinstance(item, datetime) else item 
+                         for item in v]
+        else:
+            result[k] = v
+    return result
+
 # Authentication Functions
 async def verify_admin(api_key: str = Depends(api_key_header)):
     if api_key != ADMIN_API_KEY:
@@ -217,7 +257,7 @@ async def verify_user(api_key: str = Depends(api_key_header)):
     if api_key == ADMIN_API_KEY:
         return ADMIN_ID
         
-    user = db.users.find_one({"api_key": api_key})
+    user = await db.users.find_one({"api_key": api_key})
     if not user:
         raise HTTPException(
             status_code=401,
@@ -240,7 +280,7 @@ async def verify_api_key(api_key: str = Depends(api_key_header)):
         return {"user_id": ADMIN_ID, "is_admin": True}
     
     # Otherwise check regular users
-    user = db.users.find_one({"api_key": api_key})
+    user = await db.users.find_one({"api_key": api_key})
     if not user:
         raise HTTPException(
             status_code=401,
@@ -304,28 +344,39 @@ async def is_cancellation_allowed(tiffin: dict) -> bool:
         # If any error occurs, default to not allowing cancellation
         return False
 
+# Optimized Background Tasks
 async def update_tiffin_statuses():
     """
-    Automatically update tiffin statuses based on time:
-    - When cancellation time passes, update to preparing
-    - 90 min later, update to prepared
-    - 30 min later, update to out_for_delivery
-    - 1 hour later (2 hours after cancellation time), update to delivered
+    Automatically update tiffin statuses based on time
     """
     try:
         current_time = datetime.now(IST)
         today = current_time.strftime("%Y-%m-%d")
-        current_time_str = current_time.strftime("%H:%M")
         
-        # Find tiffins for today that are still scheduled
-        tiffins = list(db.tiffins.find({
-            "date": today,
-            "status": {"$ne": TiffinStatus.CANCELLED}
-        }))
+        # Find tiffins for today that need status updates (avoiding cancelled ones)
+        pipeline = [
+            {"$match": {
+                "date": today,
+                "status": {"$ne": TiffinStatus.CANCELLED}
+            }},
+            {"$project": {
+                "_id": 1,
+                "assigned_users": 1,
+                "date": 1,
+                "time": 1,
+                "status": 1,
+                "cancellation_time": 1
+            }}
+        ]
+        
+        tiffins = await db.tiffins.aggregate(pipeline).to_list(length=100)
+        
+        # Process status updates in batches
+        update_operations = []
+        notifications = []
         
         for tiffin in tiffins:
             try:
-                # Parse cancellation time
                 if "cancellation_time" not in tiffin:
                     continue
                     
@@ -337,12 +388,11 @@ async def update_tiffin_statuses():
                 preparing_time = cancellation_datetime
                 prepared_time = cancellation_datetime + timedelta(minutes=120)
                 out_for_delivery_time = prepared_time + timedelta(minutes=30)
-                delivered_time = out_for_delivery_time + timedelta(minutes=30)  # 3 hours after cancellation
+                delivered_time = out_for_delivery_time + timedelta(minutes=30)
                 
                 # Current status
                 current_status = tiffin.get("status", TiffinStatus.SCHEDULED)
                 
-
                 new_status = None
                 
                 if current_time >= delivered_time and current_status != TiffinStatus.DELIVERED:
@@ -355,14 +405,12 @@ async def update_tiffin_statuses():
                     new_status = TiffinStatus.PREPARING
                 
                 if new_status:
-                    db.tiffins.update_one(
-                        {"_id": tiffin["_id"]},
-                        {
-                            "$set": {
-                                "status": new_status,
-                                "updated_at": current_time
-                            }
-                        }
+                    # Add to batch update
+                    update_operations.append(
+                        UpdateOne(
+                            {"_id": tiffin["_id"]},
+                            {"$set": {"status": new_status, "updated_at": current_time}}
+                        )
                     )
                     
                     status_display = {
@@ -376,25 +424,30 @@ async def update_tiffin_statuses():
                     
                     status_message = f"Your tiffin for {tiffin['date']} ({tiffin['time']}) is now {status_display.get(new_status, new_status)}."
                     
+                    # Prepare notifications
                     for user_id in tiffin["assigned_users"]:
-                        notification = {
+                        notifications.append({
                             "user_id": user_id,
                             "title": "Tiffin Status Updated",
                             "message": status_message,
                             "type": "info",
                             "read": False,
                             "created_at": current_time
-                        }
-                        db.notifications.insert_one(notification)
-                    
-                    print(f"Updated tiffin {tiffin['_id']} status to {new_status}")
+                        })
             except Exception as e:
                 print(f"Error updating tiffin {tiffin.get('_id')}: {str(e)}")
                 continue
-                
+        
+        # Execute batch updates
+        if update_operations:
+            await db.tiffins.bulk_write(update_operations)
+            
+        # Insert notifications
+        if notifications:
+            await db.notifications.insert_many(notifications)
+            
     except Exception as e:
         print(f"Error in update_tiffin_statuses: {str(e)}")
-
 
 async def create_database_backup():
     """Create a complete backup of the TiffinTreats database"""
@@ -413,12 +466,12 @@ async def create_database_backup():
             "collections": {}
         }
         
+        # Process collections in parallel
+        collection_tasks = []
         for collection_name in collections_to_backup:
-            collection = db[collection_name]
-            documents = list(collection.find({}))
+            collection_tasks.append(backup_collection(collection_name, backup_data))
             
-            serialized_docs = [serialize_doc(doc) for doc in documents]
-            backup_data["collections"][collection_name] = serialized_docs
+        await asyncio.gather(*collection_tasks)
         
         # Add metadata
         backup_data["metadata"] = {
@@ -427,17 +480,18 @@ async def create_database_backup():
             "app_version": "1.0"
         }
         
-        db.tt_backups.insert_one(backup_data)
+        await db.tt_backups.insert_one(backup_data)
         
         # Save local JSON backup
         json_backup_path = BACKUP_DIR / f"tiffintreats_backup_{backup_id}.json"
         with open(json_backup_path, 'w') as f:
             json.dump(backup_data, f, default=str, indent=2)
         
-        old_backups = list(db.tt_backups.find().sort("timestamp", -1).skip(48))
+        # Cleanup old backups
+        old_backups = await db.tt_backups.find().sort("timestamp", -1).skip(48).to_list(length=100)
         if old_backups:
             old_backup_ids = [b["backup_id"] for b in old_backups]
-            db.tt_backups.delete_many({"backup_id": {"$in": old_backup_ids}})
+            await db.tt_backups.delete_many({"backup_id": {"$in": old_backup_ids}})
         
         # Keep only the last 7 days of local backups
         seven_days_ago = backup_time - timedelta(days=7)
@@ -457,28 +511,19 @@ async def create_database_backup():
         print(f"Backup error: {str(e)}")
         return {"status": "error", "message": str(e)}
 
-def serialize_doc(doc):
-    """Convert MongoDB document to JSON-serializable format"""
-    if doc is None:
-        return None
-        
-    if isinstance(doc, dict):
-        for k, v in doc.items():
-            if isinstance(v, ObjectId):
-                doc[k] = str(v)
-            elif isinstance(v, datetime):
-                doc[k] = v.isoformat()
-            elif isinstance(v, dict):
-                doc[k] = serialize_doc(v)
-            elif isinstance(v, list):
-                doc[k] = [serialize_doc(item) for item in v]
-    return doc
-
+async def backup_collection(collection_name, backup_data):
+    """Helper function to backup a single collection"""
+    collection = db[collection_name]
+    documents = await collection.find({}).to_list(length=10000)
+    
+    serialized_docs = [serialize_doc(doc) for doc in documents]
+    backup_data["collections"][collection_name] = serialized_docs
+    return collection_name
 
 async def restore_from_backup(backup_id: str):
     """Restore database from a specific backup"""
     try:
-        backup = db.tt_backups.find_one({"backup_id": backup_id})
+        backup = await db.tt_backups.find_one({"backup_id": backup_id})
         
         if not backup:
             backup_file = BACKUP_DIR / f"tiffintreats_backup_{backup_id}.json"
@@ -490,14 +535,14 @@ async def restore_from_backup(backup_id: str):
         
         await create_database_backup()
         
+        restore_tasks = []
         for collection_name, documents in backup["collections"].items():
-            if collection_name in db.list_collection_names():
-                db[collection_name].drop()
-            
             if not documents:
                 continue
                 
-            db[collection_name].insert_many(documents)
+            restore_tasks.append(restore_collection(collection_name, documents))
+            
+        await asyncio.gather(*restore_tasks)
         
         print(f"Database restored successfully from backup: {backup_id}")
         return {"status": "success", "message": f"Database restored from backup {backup_id}"}
@@ -506,11 +551,20 @@ async def restore_from_backup(backup_id: str):
         print(f"Restore error: {str(e)}")
         return {"status": "error", "message": str(e)}
 
+async def restore_collection(collection_name, documents):
+    """Helper function to restore a single collection"""
+    if collection_name in await db.list_collection_names():
+        await db[collection_name].drop()
+        
+    if documents:
+        await db[collection_name].insert_many(documents)
+    return collection_name
+
 # Health Check
 @app.get("/health")
 async def health_check():
     try:
-        client.admin.command('ping')
+        await client.admin.command('ping')
         return {
             "status": "healthy",
             "timestamp": datetime.now(IST)
@@ -526,14 +580,13 @@ APP_URL = os.getenv("APP_URL", "https://tiffintreats-20mb.onrender.com")
 PING_INTERVAL = 14 * 60  # 14 minutes
 
 async def keep_alive():
-    async with httpx.AsyncClient() as client:
-        while True:
-            try:
-                response = await client.get(f"{APP_URL}/health")
-                print(f"Keep-alive ping sent. Status: {response.status_code}")
-            except Exception as e:
-                print(f"Keep-alive ping failed: {e}")
-            await asyncio.sleep(PING_INTERVAL)
+    while True:
+        try:
+            response = await http_client.get(f"{APP_URL}/health")
+            print(f"Keep-alive ping sent. Status: {response.status_code}")
+        except Exception as e:
+            print(f"Keep-alive ping failed: {e}")
+        await asyncio.sleep(PING_INTERVAL)
 
 # Root
 @app.get("/")
@@ -556,7 +609,7 @@ async def login(user_id: str, password: str):
         }
     
     # Regular user login
-    user = db.users.find_one({"user_id": user_id})
+    user = await db.users.find_one({"user_id": user_id})
     if not user:
         raise HTTPException(
             status_code=401,
@@ -578,7 +631,7 @@ async def login(user_id: str, password: str):
                 detail="Invalid credentials"
             )
         # Update to hashed password
-        db.users.update_one(
+        await db.users.update_one(
             {"user_id": user_id},
             {"$set": {"password": hash_password(password)}}
         )
@@ -592,7 +645,7 @@ async def login(user_id: str, password: str):
     
     # Generate new API key on each login for security
     new_api_key = generate_api_key()
-    db.users.update_one(
+    await db.users.update_one(
         {"user_id": user_id},
         {"$set": {"api_key": new_api_key, "last_login": datetime.now(IST)}}
     )
@@ -607,13 +660,13 @@ async def login(user_id: str, password: str):
 @app.post("/admin/users")
 async def create_user(user: UserCreate, _: bool = Depends(verify_admin)):
     # Check if user already exists
-    if db.users.find_one({"user_id": user.user_id}):
+    if await db.users.find_one({"user_id": user.user_id}):
         raise HTTPException(
             status_code=400,
             detail="User ID already exists"
         )
     
-    if db.users.find_one({"email": user.email}):
+    if await db.users.find_one({"email": user.email}):
         raise HTTPException(
             status_code=400,
             detail="Email already registered"
@@ -631,7 +684,7 @@ async def create_user(user: UserCreate, _: bool = Depends(verify_admin)):
     })
     
     try:
-        db.users.insert_one(user_dict)
+        result = await db.users.insert_one(user_dict)
         return {"status": "success", "user_id": user.user_id}
     except Exception as e:
         raise HTTPException(
@@ -647,20 +700,22 @@ async def get_all_users(
 ):
     try:
         # Get total count for pagination
-        total_users = db.users.count_documents({})
+        total_users = await db.users.count_documents({})
         
-        # Get users with pagination
-        users = list(db.users.find({}, {"password": 0, "api_key": 0}).skip(skip).limit(limit))
+        # Get users with pagination and projection to exclude sensitive fields
+        users = await db.users.find(
+            {}, 
+            {"password": 0, "api_key": 0}
+        ).skip(skip).limit(limit).to_list(length=limit)
         
         # Serialize users
-        for user in users:
-            user["_id"] = str(user["_id"])
+        serialized_users = [serialize_doc(user) for user in users]
             
         return {
             "total": total_users,
             "skip": skip,
             "limit": limit,
-            "users": users
+            "users": serialized_users
         }
     except Exception as e:
         raise HTTPException(
@@ -670,14 +725,13 @@ async def get_all_users(
 
 @app.get("/admin/users/{user_id}")
 async def get_user(user_id: str, _: bool = Depends(verify_admin)):
-    user = db.users.find_one({"user_id": user_id}, {"password": 0, "api_key": 0})
+    user = await db.users.find_one({"user_id": user_id}, {"password": 0, "api_key": 0})
     if not user:
         raise HTTPException(
             status_code=404,
             detail="User not found"
         )
-    user["_id"] = str(user["_id"])
-    return user
+    return serialize_doc(user)
 
 @app.put("/admin/users/{user_id}")
 async def update_user(
@@ -685,7 +739,6 @@ async def update_user(
     updates: Dict,
     _: bool = Depends(verify_admin)
 ):
-
     if user_id == ADMIN_ID:
         raise HTTPException(
             status_code=400,
@@ -703,7 +756,7 @@ async def update_user(
     
     # Check email uniqueness if email is being updated
     if "email" in update_data:
-        existing_user = db.users.find_one({
+        existing_user = await db.users.find_one({
             "email": update_data["email"],
             "user_id": {"$ne": user_id}
         })
@@ -713,7 +766,7 @@ async def update_user(
                 detail="Email already registered"
             )
     
-    result = db.users.update_one(
+    result = await db.users.update_one(
         {"user_id": user_id},
         {"$set": update_data}
     )
@@ -739,7 +792,7 @@ async def reset_user_password(
             detail="Admin password cannot be reset through this endpoint"
         )
     
-    user = db.users.find_one({"user_id": user_id})
+    user = await db.users.find_one({"user_id": user_id})
     if not user:
         raise HTTPException(
             status_code=404,
@@ -747,7 +800,7 @@ async def reset_user_password(
         )
     
     hashed_password = hash_password(new_password)
-    db.users.update_one(
+    await db.users.update_one(
         {"user_id": user_id},
         {"$set": {"password": hashed_password}}
     )
@@ -763,23 +816,25 @@ async def delete_user(user_id: str, _: bool = Depends(verify_admin)):
             detail="Cannot delete admin user"
         )
     
-    result = db.users.delete_one({"user_id": user_id})
+    result = await db.users.delete_one({"user_id": user_id})
     if result.deleted_count == 0:
         raise HTTPException(
             status_code=404,
             detail="User not found"
         )
     
-    # Clean up user's data
-    db.tiffins.update_many(
-        {"assigned_users": user_id},
-        {"$pull": {"assigned_users": user_id}}
-    )
+    # Clean up user's data in parallel
+    cleanup_tasks = [
+        db.tiffins.update_many(
+            {"assigned_users": user_id},
+            {"$pull": {"assigned_users": user_id}}
+        ),
+        db.poll_votes.delete_many({"user_id": user_id}),
+        db.notifications.delete_many({"user_id": user_id}),
+        db.tiffin_requests.delete_many({"user_id": user_id})
+    ]
     
-    # Clean up user's votes, notifications, etc.
-    db.poll_votes.delete_many({"user_id": user_id})
-    db.notifications.delete_many({"user_id": user_id})
-    db.tiffin_requests.delete_many({"user_id": user_id})
+    await asyncio.gather(*cleanup_tasks)
     
     return {"status": "success"}
 
@@ -797,7 +852,7 @@ async def get_user_profile(user_id: str = Depends(verify_user)):
             "created_at": datetime.now(IST).isoformat()
         }
     
-    user = db.users.find_one(
+    user = await db.users.find_one(
         {"user_id": user_id},
         {"password": 0, "api_key": 0}
     )
@@ -806,8 +861,7 @@ async def get_user_profile(user_id: str = Depends(verify_user)):
             status_code=404,
             detail="User not found"
         )
-    user["_id"] = str(user["_id"])
-    return user
+    return serialize_doc(user)
 
 @app.put("/user/profile")
 async def update_user_profile(
@@ -832,7 +886,7 @@ async def update_user_profile(
     
     # Check email uniqueness if email is being updated
     if "email" in update_data:
-        existing_user = db.users.find_one({
+        existing_user = await db.users.find_one({
             "email": update_data["email"],
             "user_id": {"$ne": user_id}
         })
@@ -842,7 +896,7 @@ async def update_user_profile(
                 detail="Email already registered"
             )
     
-    result = db.users.update_one(
+    result = await db.users.update_one(
         {"user_id": user_id},
         {"$set": update_data}
     )
@@ -868,7 +922,7 @@ async def change_password(
             detail="Admin password cannot be changed through this endpoint"
         )
     
-    user = db.users.find_one({"user_id": user_id})
+    user = await db.users.find_one({"user_id": user_id})
     if not user:
         raise HTTPException(
             status_code=404,
@@ -892,7 +946,7 @@ async def change_password(
     
     # Update to new hashed password
     hashed_new_password = hash_password(new_password)
-    db.users.update_one(
+    await db.users.update_one(
         {"user_id": user_id},
         {"$set": {"password": hashed_new_password}}
     )
@@ -905,7 +959,8 @@ async def create_tiffin(tiffin: TiffinCreate, _: bool = Depends(verify_admin)):
     try:
         # Validate assigned users exist
         for user_id in tiffin.assigned_users:
-            if not db.users.find_one({"user_id": user_id, "active": True}):
+            user = await db.users.find_one({"user_id": user_id, "active": True}, {"_id": 1})
+            if not user:
                 raise HTTPException(
                     status_code=400,
                     detail=f"User {user_id} not found or inactive"
@@ -923,28 +978,33 @@ async def create_tiffin(tiffin: TiffinCreate, _: bool = Depends(verify_admin)):
         
         # Create tiffin document
         tiffin_dict = tiffin.dict()
+        current_time = datetime.now(IST)
         tiffin_dict.update({
-            "created_at": datetime.now(IST),
-            "updated_at": datetime.now(IST)
+            "created_at": current_time,
+            "updated_at": current_time
         })
         
-        result = db.tiffins.insert_one(tiffin_dict)
+        result = await db.tiffins.insert_one(tiffin_dict)
+        tiffin_id = str(result.inserted_id)
         
         # Create notifications for assigned users
+        notifications = []
         for user_id in tiffin.assigned_users:
-            notification = {
+            notifications.append({
                 "user_id": user_id,
                 "title": "New Tiffin Scheduled",
                 "message": f"A new tiffin has been scheduled for {tiffin.date} ({tiffin.time}).",
                 "type": "info",
                 "read": False,
-                "created_at": datetime.now(IST)
-            }
-            db.notifications.insert_one(notification)
+                "created_at": current_time
+            })
+            
+        if notifications:
+            await db.notifications.insert_many(notifications)
         
         return {
             "status": "success",
-            "tiffin_id": str(result.inserted_id)
+            "tiffin_id": tiffin_id
         }
     except HTTPException:
         raise
@@ -976,6 +1036,8 @@ async def create_batch_tiffins(
             )
         
         created_tiffins = []
+        current_time = datetime.now(IST)
+        all_notifications = []
         
         for group in user_groups:
             # Skip empty groups
@@ -984,7 +1046,8 @@ async def create_batch_tiffins(
                 
             # Validate all users in group
             for user_id in group.users:
-                if not db.users.find_one({"user_id": user_id, "active": True}):
+                user = await db.users.find_one({"user_id": user_id, "active": True}, {"_id": 1})
+                if not user:
                     raise HTTPException(
                         status_code=400,
                         detail=f"User {user_id} not found or inactive"
@@ -995,24 +1058,28 @@ async def create_batch_tiffins(
             tiffin_dict.update({
                 "assigned_users": group.users,
                 "price": group.price,  # Use the group-specific price
-                "created_at": datetime.now(IST),
-                "updated_at": datetime.now(IST)
+                "created_at": current_time,
+                "updated_at": current_time
             })
             
-            result = db.tiffins.insert_one(tiffin_dict)
-            created_tiffins.append(str(result.inserted_id))
+            result = await db.tiffins.insert_one(tiffin_dict)
+            tiffin_id = str(result.inserted_id)
+            created_tiffins.append(tiffin_id)
             
             # Create notifications for assigned users
             for user_id in group.users:
-                notification = {
+                all_notifications.append({
                     "user_id": user_id,
                     "title": "New Tiffin Scheduled",
                     "message": f"A new tiffin has been scheduled for {base_tiffin.date} ({base_tiffin.time}).",
                     "type": "info",
                     "read": False,
-                    "created_at": datetime.now(IST)
-                }
-                db.notifications.insert_one(notification)
+                    "created_at": current_time
+                })
+        
+        # Bulk insert all notifications
+        if all_notifications:
+            await db.notifications.insert_many(all_notifications)
         
         return {
             "status": "success",
@@ -1060,21 +1127,25 @@ async def get_all_tiffins(
         if user_id:
             query["assigned_users"] = user_id
         
-        # Get total count for pagination
-        total_count = db.tiffins.count_documents(query)
-        
         # Get tiffins with pagination
-        tiffins = list(db.tiffins.find(query).sort("date", -1).skip(skip).limit(limit))
+        tiffins_cursor = db.tiffins.find(query).sort("date", -1).skip(skip).limit(limit)
+        tiffins = await tiffins_cursor.to_list(length=limit)
+        
+        # Get total count for pagination only if on first page
+        if skip == 0:
+            total_count = await db.tiffins.count_documents(query)
+        else:
+            # Use estimated count for better performance on subsequent pages
+            total_count = await db.tiffins.estimated_document_count()
         
         # Serialize tiffins
-        for tiffin in tiffins:
-            tiffin["_id"] = str(tiffin["_id"])
+        serialized_tiffins = [serialize_doc(tiffin) for tiffin in tiffins]
             
         return {
             "total": total_count,
             "skip": skip,
             "limit": limit,
-            "data": tiffins
+            "data": serialized_tiffins
         }
     except HTTPException:
         raise
@@ -1096,7 +1167,7 @@ async def get_tiffin_by_id(
                 detail="Invalid tiffin ID format"
             )
             
-        tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
+        tiffin = await db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
         
         if not tiffin:
             raise HTTPException(
@@ -1106,13 +1177,13 @@ async def get_tiffin_by_id(
         
         # Get user details for assigned users
         user_details = []
-        for user_id in tiffin["assigned_users"]:
-            user = db.users.find_one({"user_id": user_id}, {"password": 0, "api_key": 0})
-            if user:
-                user["_id"] = str(user["_id"])
-                user_details.append(user)
+        if "assigned_users" in tiffin:
+            user_query = {"user_id": {"$in": tiffin["assigned_users"]}}
+            user_projection = {"password": 0, "api_key": 0}
+            users = await db.users.find(user_query, user_projection).to_list(length=100)
+            user_details = [serialize_doc(user) for user in users]
         
-        tiffin["_id"] = str(tiffin["_id"])
+        tiffin = serialize_doc(tiffin)
         tiffin["user_details"] = user_details
         
         return tiffin
@@ -1138,7 +1209,7 @@ async def update_tiffin(
             )
         
         # Get the current tiffin to check for changes
-        current_tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
+        current_tiffin = await db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
         if not current_tiffin:
             raise HTTPException(
                 status_code=404,
@@ -1179,22 +1250,28 @@ async def update_tiffin(
         # Check if assigned users exist if provided
         if "assigned_users" in update_data:
             new_users = set(update_data["assigned_users"]) - set(current_tiffin["assigned_users"])
-            for user_id in new_users:
-                if not db.users.find_one({"user_id": user_id, "active": True}):
+            if new_users:
+                user_query = {"user_id": {"$in": list(new_users)}, "active": True}
+                valid_users = await db.users.count_documents(user_query)
+                
+                if valid_users != len(new_users):
                     raise HTTPException(
                         status_code=400,
-                        detail=f"User {user_id} not found or inactive"
+                        detail="One or more users not found or inactive"
                     )
         
         # Add updated_at timestamp
         update_data["updated_at"] = datetime.now(IST)
         
-        result = db.tiffins.update_one(
+        result = await db.tiffins.update_one(
             {"_id": ObjectId(tiffin_id)},
             {"$set": update_data}
         )
         
         # If status changed, notify affected users
+        notifications = []
+        current_time = datetime.now(IST)
+        
         if "status" in update_data and update_data["status"] != current_tiffin["status"]:
             status_display = {
                 "scheduled": "Scheduled",
@@ -1208,29 +1285,31 @@ async def update_tiffin(
             status_message = f"Your tiffin for {current_tiffin['date']} ({current_tiffin['time']}) is now {status_display.get(update_data['status'], update_data['status'])}."
             
             for user_id in current_tiffin["assigned_users"]:
-                notification = {
+                notifications.append({
                     "user_id": user_id,
                     "title": "Tiffin Status Updated",
                     "message": status_message,
                     "type": "info",
                     "read": False,
-                    "created_at": datetime.now(IST)
-                }
-                db.notifications.insert_one(notification)
+                    "created_at": current_time
+                })
         
         # If new users added, notify them
         if "assigned_users" in update_data:
             new_users = set(update_data["assigned_users"]) - set(current_tiffin["assigned_users"])
             for user_id in new_users:
-                notification = {
+                notifications.append({
                     "user_id": user_id,
                     "title": "New Tiffin Assigned",
                     "message": f"A tiffin has been assigned to you for {current_tiffin['date']} ({current_tiffin['time']}).",
                     "type": "info",
                     "read": False,
-                    "created_at": datetime.now(IST)
-                }
-                db.notifications.insert_one(notification)
+                    "created_at": current_time
+                })
+        
+        # Bulk insert notifications
+        if notifications:
+            await db.notifications.insert_many(notifications)
         
         return {"status": "success"}
     except HTTPException:
@@ -1255,7 +1334,11 @@ async def update_tiffin_status(
             )
         
         # Get current tiffin to check if status is changing
-        current_tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
+        current_tiffin = await db.tiffins.find_one(
+            {"_id": ObjectId(tiffin_id)},
+            {"status": 1, "assigned_users": 1, "date": 1, "time": 1}
+        )
+        
         if not current_tiffin:
             raise HTTPException(
                 status_code=404,
@@ -1263,12 +1346,13 @@ async def update_tiffin_status(
             )
             
         # Update status
-        result = db.tiffins.update_one(
+        current_time = datetime.now(IST)
+        result = await db.tiffins.update_one(
             {"_id": ObjectId(tiffin_id)},
             {
                 "$set": {
                     "status": status,
-                    "updated_at": datetime.now(IST)
+                    "updated_at": current_time
                 }
             }
         )
@@ -1286,16 +1370,19 @@ async def update_tiffin_status(
             
             status_message = f"Your tiffin for {current_tiffin['date']} ({current_tiffin['time']}) is now {status_display.get(status, status)}."
             
+            notifications = []
             for user_id in current_tiffin["assigned_users"]:
-                notification = {
+                notifications.append({
                     "user_id": user_id,
                     "title": "Tiffin Status Updated",
                     "message": status_message,
                     "type": "info",
                     "read": False,
-                    "created_at": datetime.now(IST)
-                }
-                db.notifications.insert_one(notification)
+                    "created_at": current_time
+                })
+                
+            if notifications:
+                await db.notifications.insert_many(notifications)
         
         return {"status": "success"}
     except HTTPException:
@@ -1320,7 +1407,11 @@ async def assign_users_to_tiffin(
             )
             
         # Get current tiffin
-        tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
+        tiffin = await db.tiffins.find_one(
+            {"_id": ObjectId(tiffin_id)},
+            {"assigned_users": 1, "date": 1, "time": 1}
+        )
+        
         if not tiffin:
             raise HTTPException(
                 status_code=404,
@@ -1328,41 +1419,49 @@ async def assign_users_to_tiffin(
             )
             
         # Validate users exist
-        for user_id in user_ids:
-            if not db.users.find_one({"user_id": user_id, "active": True}):
+        if user_ids:
+            user_query = {"user_id": {"$in": user_ids}, "active": True}
+            valid_users = await db.users.count_documents(user_query)
+            
+            if valid_users != len(user_ids):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"User {user_id} not found or inactive"
+                    detail="One or more users not found or inactive"
                 )
                 
         # Find new users (not already assigned)
-        current_users = set(tiffin["assigned_users"])
+        current_users = set(tiffin.get("assigned_users", []))
         new_users = [uid for uid in user_ids if uid not in current_users]
                 
         # Update tiffin with new users
-        result = db.tiffins.update_one(
+        current_time = datetime.now(IST)
+        result = await db.tiffins.update_one(
             {"_id": ObjectId(tiffin_id)},
             {
                 "$addToSet": {"assigned_users": {"$each": user_ids}},
-                "$set": {"updated_at": datetime.now(IST)}
+                "$set": {"updated_at": current_time}
             }
         )
         
         # Notify new users
-        for user_id in new_users:
-            notification = {
-                "user_id": user_id,
-                "title": "New Tiffin Assigned",
-                "message": f"A tiffin has been assigned to you for {tiffin['date']} ({tiffin['time']}).",
-                "type": "info",
-                "read": False,
-                "created_at": datetime.now(IST)
-            }
-            db.notifications.insert_one(notification)
+        if new_users:
+            notifications = []
+            for user_id in new_users:
+                notifications.append({
+                    "user_id": user_id,
+                    "title": "New Tiffin Assigned",
+                    "message": f"A tiffin has been assigned to you for {tiffin['date']} ({tiffin['time']}).",
+                    "type": "info",
+                    "read": False,
+                    "created_at": current_time
+                })
+                
+            if notifications:
+                await db.notifications.insert_many(notifications)
         
         return {
             "status": "success",
-            "assigned_users": list(set(tiffin["assigned_users"]).union(set(user_ids)))
+            "assigned_users": list(current_users.union(set(user_ids)))
         }
     except HTTPException:
         raise
@@ -1386,7 +1485,11 @@ async def unassign_users_from_tiffin(
             )
             
         # Get current tiffin
-        tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
+        tiffin = await db.tiffins.find_one(
+            {"_id": ObjectId(tiffin_id)},
+            {"assigned_users": 1, "date": 1, "time": 1}
+        )
+        
         if not tiffin:
             raise HTTPException(
                 status_code=404,
@@ -1394,33 +1497,42 @@ async def unassign_users_from_tiffin(
             )
                 
         # Update tiffin by removing users
-        result = db.tiffins.update_one(
+        current_time = datetime.now(IST)
+        result = await db.tiffins.update_one(
             {"_id": ObjectId(tiffin_id)},
             {
                 "$pullAll": {"assigned_users": user_ids},
-                "$set": {"updated_at": datetime.now(IST)}
+                "$set": {"updated_at": current_time}
             }
         )
         
         # If no users left, mark as cancelled
-        updated_tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
+        updated_tiffin = await db.tiffins.find_one(
+            {"_id": ObjectId(tiffin_id)},
+            {"assigned_users": 1}
+        )
+        
         if not updated_tiffin["assigned_users"]:
-            db.tiffins.update_one(
+            await db.tiffins.update_one(
                 {"_id": ObjectId(tiffin_id)},
                 {"$set": {"status": TiffinStatus.CANCELLED}}
             )
             
         # Notify unassigned users
-        for user_id in user_ids:
-            notification = {
-                "user_id": user_id,
-                "title": "Tiffin Unassigned",
-                "message": f"You have been unassigned from the tiffin scheduled for {tiffin['date']} ({tiffin['time']}).",
-                "type": "info",
-                "read": False,
-                "created_at": datetime.now(IST)
-            }
-            db.notifications.insert_one(notification)
+        if user_ids:
+            notifications = []
+            for user_id in user_ids:
+                notifications.append({
+                    "user_id": user_id,
+                    "title": "Tiffin Unassigned",
+                    "message": f"You have been unassigned from the tiffin scheduled for {tiffin['date']} ({tiffin['time']}).",
+                    "type": "info",
+                    "read": False,
+                    "created_at": current_time
+                })
+                
+            if notifications:
+                await db.notifications.insert_many(notifications)
         
         return {
             "status": "success",
@@ -1444,7 +1556,11 @@ async def delete_tiffin(tiffin_id: str, _: bool = Depends(verify_admin)):
             )
             
         # Get tiffin first to notify users
-        tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
+        tiffin = await db.tiffins.find_one(
+            {"_id": ObjectId(tiffin_id)},
+            {"assigned_users": 1, "date": 1, "time": 1}
+        )
+        
         if not tiffin:
             raise HTTPException(
                 status_code=404,
@@ -1452,19 +1568,25 @@ async def delete_tiffin(tiffin_id: str, _: bool = Depends(verify_admin)):
             )
             
         # Delete the tiffin
-        result = db.tiffins.delete_one({"_id": ObjectId(tiffin_id)})
+        result = await db.tiffins.delete_one({"_id": ObjectId(tiffin_id)})
         
         # Notify affected users
-        for user_id in tiffin["assigned_users"]:
-            notification = {
-                "user_id": user_id,
-                "title": "Tiffin Cancelled",
-                "message": f"The tiffin scheduled for {tiffin['date']} ({tiffin['time']}) has been cancelled.",
-                "type": "warning",
-                "read": False,
-                "created_at": datetime.now(IST)
-            }
-            db.notifications.insert_one(notification)
+        if "assigned_users" in tiffin and tiffin["assigned_users"]:
+            notifications = []
+            current_time = datetime.now(IST)
+            
+            for user_id in tiffin["assigned_users"]:
+                notifications.append({
+                    "user_id": user_id,
+                    "title": "Tiffin Cancelled",
+                    "message": f"The tiffin scheduled for {tiffin['date']} ({tiffin['time']}) has been cancelled.",
+                    "type": "warning",
+                    "read": False,
+                    "created_at": current_time
+                })
+                
+            if notifications:
+                await db.notifications.insert_many(notifications)
         
         return {"status": "success"}
     except HTTPException:
@@ -1504,26 +1626,30 @@ async def get_user_tiffins(
         if status:
             query["status"] = status
         
-        # Get total count for pagination
-        total_count = db.tiffins.count_documents(query)
+        # Determine fields to include/exclude based on user
+        projection = None
+        if user_id != ADMIN_ID:
+            projection = {"description": 0, "delivery_time": 0}
         
         # Get tiffins with pagination
-        tiffins = list(db.tiffins.find(query).sort("date", -1).skip(skip).limit(limit))
+        tiffins_cursor = db.tiffins.find(query, projection).sort("date", -1).skip(skip).limit(limit)
+        tiffins = await tiffins_cursor.to_list(length=limit)
         
-        # Serialize tiffins and remove description for regular users
-        for tiffin in tiffins:
-            tiffin["_id"] = str(tiffin["_id"])
-            if user_id != ADMIN_ID:  # Only hide for non-admin users
-                if "description" in tiffin:
-                    tiffin.pop("description", None)
-                if "delivery_time" in tiffin:
-                    tiffin.pop("delivery_time", None)
+        # Get total count only if needed (first page)
+        if skip == 0:
+            total_count = await db.tiffins.count_documents(query)
+        else:
+            # Use estimated count for better performance
+            total_count = await db.tiffins.estimated_document_count()
+        
+        # Serialize tiffins
+        serialized_tiffins = [serialize_doc(tiffin) for tiffin in tiffins]
             
         return {
             "total": total_count,
             "skip": skip,
             "limit": limit,
-            "data": tiffins
+            "data": serialized_tiffins
         }
     except HTTPException:
         raise
@@ -1551,7 +1677,7 @@ async def get_user_tiffin_by_id(
         if user_id != ADMIN_ID:
             query["assigned_users"] = user_id
             
-        tiffin = db.tiffins.find_one(query)
+        tiffin = await db.tiffins.find_one(query)
         
         if not tiffin:
             raise HTTPException(
@@ -1559,9 +1685,7 @@ async def get_user_tiffin_by_id(
                 detail="Tiffin not found"
             )
             
-        tiffin["_id"] = str(tiffin["_id"])
-        
-        return tiffin
+        return serialize_doc(tiffin)
     except HTTPException:
         raise
     except Exception as e:
@@ -1583,7 +1707,7 @@ async def get_tiffin_cancellations(
             )
             
         # Get the tiffin
-        tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
+        tiffin = await db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
         if not tiffin:
             raise HTTPException(
                 status_code=404,
@@ -1602,17 +1726,22 @@ async def get_tiffin_cancellations(
         
         # If tiffin has a cancellations field, return it
         if "cancellations" in tiffin:
+            # Get user details in batch
+            user_ids = [c["user_id"] for c in tiffin["cancellations"]]
+            users_query = {"user_id": {"$in": user_ids}}
+            users_projection = {"user_id": 1, "name": 1, "email": 1}
+            users = await db.users.find(users_query, users_projection).to_list(length=100)
+            
+            # Create a lookup map for quick access
+            user_map = {u["user_id"]: u for u in users}
+            
             for cancellation in tiffin["cancellations"]:
-                # Get user details
-                cancelled_user = db.users.find_one(
-                    {"user_id": cancellation["user_id"]},
-                    {"name": 1, "email": 1}
-                )
+                user_info = user_map.get(cancellation["user_id"], {})
                 
                 cancellation_info = {
                     "user_id": cancellation["user_id"],
-                    "name": cancelled_user.get("name", "Unknown User") if cancelled_user else "Unknown User",
-                    "email": cancelled_user.get("email", "No email") if cancelled_user else "No email",
+                    "name": user_info.get("name", "Unknown User"),
+                    "email": user_info.get("email", "No email"),
                     "cancelled_at": cancellation["cancelled_at"]
                 }
                 cancellations.append(cancellation_info)
@@ -1638,13 +1767,10 @@ async def get_user_today_tiffins(user_id: str = Depends(verify_user)):
             "date": today
         }
         
-        tiffins = list(db.tiffins.find(query).sort("time", 1))
+        tiffins = await db.tiffins.find(query).sort("time", 1).to_list(length=20)
         
-        # Properly serialize the tiffins
-        serialized_tiffins = []
-        for tiffin in tiffins:
-            serialized_tiffin = serialize_doc(tiffin)  # Using the serialize_doc function
-            serialized_tiffins.append(serialized_tiffin)
+        # Serialize the tiffins
+        serialized_tiffins = [serialize_doc(tiffin) for tiffin in tiffins]
             
         return serialized_tiffins
     except Exception as e:
@@ -1670,17 +1796,14 @@ async def get_user_upcoming_tiffins(
             "status": {"$ne": TiffinStatus.CANCELLED}
         }
         
+        # Get tiffins with pagination and sorting
+        tiffins = await db.tiffins.find(query).sort([("date", 1), ("time", 1)]).skip(skip).limit(limit).to_list(length=limit)
+        
         # Get total count for pagination
-        total_count = db.tiffins.count_documents(query)
+        total_count = await db.tiffins.count_documents(query)
         
-        # Get tiffins with pagination
-        tiffins = list(db.tiffins.find(query).sort("date", 1).sort("time", 1).skip(skip).limit(limit))
-        
-        # Properly serialize the tiffins
-        serialized_tiffins = []
-        for tiffin in tiffins:
-            serialized_tiffin = serialize_doc(tiffin)  # Using the serialize_doc function
-            serialized_tiffins.append(serialized_tiffin)
+        # Serialize the tiffins
+        serialized_tiffins = [serialize_doc(tiffin) for tiffin in tiffins]
             
         return {
             "total": total_count,
@@ -1706,7 +1829,7 @@ async def cancel_tiffin(
                 detail="Invalid tiffin ID format"
             )
             
-        tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
+        tiffin = await db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
         if not tiffin:
             raise HTTPException(
                 status_code=404,
@@ -1728,19 +1851,20 @@ async def cancel_tiffin(
             )
         
         # Record cancellation event
+        current_time = datetime.now(IST)
         cancellation_record = {
             "user_id": user_id,
-            "cancelled_at": datetime.now(IST)
+            "cancelled_at": current_time
         }
         
         # For admin, just change status
         if user_id == ADMIN_ID:
-            result = db.tiffins.update_one(
+            result = await db.tiffins.update_one(
                 {"_id": ObjectId(tiffin_id)},
                 {
                     "$set": {
                         "status": TiffinStatus.CANCELLED,
-                        "updated_at": datetime.now(IST)
+                        "updated_at": current_time
                     },
                     "$push": {
                         "cancellations": cancellation_record
@@ -1749,23 +1873,26 @@ async def cancel_tiffin(
             )
             
             # Notify all assigned users
+            notifications = []
             for assigned_user in tiffin["assigned_users"]:
-                notification = {
+                notifications.append({
                     "user_id": assigned_user,
                     "title": "Tiffin Cancelled",
                     "message": f"The tiffin scheduled for {tiffin['date']} ({tiffin['time']}) has been cancelled by admin.",
                     "type": "warning",
                     "read": False,
-                    "created_at": datetime.now(IST)
-                }
-                db.notifications.insert_one(notification)
+                    "created_at": current_time
+                })
+                
+            if notifications:
+                await db.notifications.insert_many(notifications)
         else:
             # For regular user, remove them from assigned_users
-            result = db.tiffins.update_one(
+            result = await db.tiffins.update_one(
                 {"_id": ObjectId(tiffin_id)},
                 {
                     "$pull": {"assigned_users": user_id},
-                    "$set": {"updated_at": datetime.now(IST)},
+                    "$set": {"updated_at": current_time},
                     "$push": {
                         "cancellations": cancellation_record
                     }
@@ -1779,14 +1906,14 @@ async def cancel_tiffin(
                 "message": f"You have successfully cancelled your tiffin for {tiffin['date']} ({tiffin['time']}).",
                 "type": "info",
                 "read": False,
-                "created_at": datetime.now(IST)
+                "created_at": current_time
             }
-            db.notifications.insert_one(notification)
+            await db.notifications.insert_one(notification)
             
             # If no users left, mark as cancelled
-            updated_tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
+            updated_tiffin = await db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
             if not updated_tiffin["assigned_users"]:
-                db.tiffins.update_one(
+                await db.tiffins.update_one(
                     {"_id": ObjectId(tiffin_id)},
                     {"$set": {"status": TiffinStatus.CANCELLED}}
                 )
@@ -1839,21 +1966,20 @@ async def get_user_history(
             today = datetime.now(IST).strftime("%Y-%m-%d")
             query["date"] = {"$lt": today}
         
-        # Get total count for pagination
-        total_count = db.tiffins.count_documents(query)
-        
         # Get history with pagination
-        history = list(db.tiffins.find(query).sort("date", -1).skip(skip).limit(limit))
+        history = await db.tiffins.find(query).sort("date", -1).skip(skip).limit(limit).to_list(length=limit)
+        
+        # Get total count for pagination
+        total_count = await db.tiffins.count_documents(query)
         
         # Serialize history items
-        for item in history:
-            item["_id"] = str(item["_id"])
+        serialized_history = [serialize_doc(item) for item in history]
             
         return {
             "total": total_count,
             "skip": skip,
             "limit": limit,
-            "data": history
+            "data": serialized_history
         }
     except HTTPException:
         raise
@@ -1893,7 +2019,7 @@ async def request_special_tiffin(
             "created_at": datetime.now(IST)
         })
         
-        result = db.tiffin_requests.insert_one(request_dict)
+        result = await db.tiffin_requests.insert_one(request_dict)
         
         # Create notification for admin
         admin_notification = {
@@ -1904,7 +2030,7 @@ async def request_special_tiffin(
             "read": False,
             "created_at": datetime.now(IST)
         }
-        db.notifications.insert_one(admin_notification)
+        await db.notifications.insert_one(admin_notification)
         
         return {
             "status": "success",
@@ -1935,21 +2061,20 @@ async def get_tiffin_requests(
         if user_id:
             query["user_id"] = user_id
         
-        # Get total count for pagination
-        total_count = db.tiffin_requests.count_documents(query)
-        
         # Get requests with pagination
-        requests = list(db.tiffin_requests.find(query).sort("created_at", -1).skip(skip).limit(limit))
+        requests = await db.tiffin_requests.find(query).sort("created_at", -1).skip(skip).limit(limit).to_list(length=limit)
+        
+        # Get total count for pagination
+        total_count = await db.tiffin_requests.count_documents(query)
         
         # Serialize requests
-        for request in requests:
-            request["_id"] = str(request["_id"])
+        serialized_requests = [serialize_doc(request) for request in requests]
             
         return {
             "total": total_count,
             "skip": skip,
             "limit": limit,
-            "data": requests
+            "data": serialized_requests
         }
     except Exception as e:
         raise HTTPException(
@@ -1969,7 +2094,7 @@ async def get_tiffin_request(
                 detail="Invalid request ID format"
             )
             
-        request = db.tiffin_requests.find_one({"_id": ObjectId(request_id)})
+        request = await db.tiffin_requests.find_one({"_id": ObjectId(request_id)})
         
         if not request:
             raise HTTPException(
@@ -1978,14 +2103,15 @@ async def get_tiffin_request(
             )
         
         # Get user details
-        user = db.users.find_one({"user_id": request["user_id"]}, {"password": 0, "api_key": 0})
-        if user:
-            user["_id"] = str(user["_id"])
-            request["user_details"] = user
+        if "user_id" in request:
+            user = await db.users.find_one(
+                {"user_id": request["user_id"]}, 
+                {"password": 0, "api_key": 0}
+            )
+            if user:
+                request["user_details"] = serialize_doc(user)
         
-        request["_id"] = str(request["_id"])
-        
-        return request
+        return serialize_doc(request)
     except HTTPException:
         raise
     except Exception as e:
@@ -2000,12 +2126,18 @@ async def get_users_batch(
     _: bool = Depends(verify_admin)
 ):
     try:
+        if not user_ids:
+            return {"users": {}}
+            
+        batch_users = await db.users.find(
+            {"user_id": {"$in": user_ids}}, 
+            {"password": 0, "api_key": 0}
+        ).to_list(length=len(user_ids))
+        
         users = {}
-        for user_id in user_ids:
-            user = db.users.find_one({"user_id": user_id}, {"password": 0, "api_key": 0})
-            if user:
-                user["_id"] = str(user["_id"])
-                users[user_id] = user
+        for user in batch_users:
+            serialized_user = serialize_doc(user)
+            users[user["user_id"]] = serialized_user
         
         return {"users": users}
     except Exception as e:
@@ -2028,7 +2160,7 @@ async def approve_tiffin_request(
             )
             
         # Get the request
-        request = db.tiffin_requests.find_one({"_id": ObjectId(request_id)})
+        request = await db.tiffin_requests.find_one({"_id": ObjectId(request_id)})
         if not request:
             raise HTTPException(
                 status_code=404,
@@ -2056,6 +2188,7 @@ async def approve_tiffin_request(
             )
             
         # Create a new tiffin based on the request
+        current_time = datetime.now(IST)
         tiffin = {
             "date": approval.date,
             "time": approval.time,
@@ -2067,22 +2200,23 @@ async def approve_tiffin_request(
             "status": TiffinStatus.SCHEDULED,
             "menu_items": approval.menu_items or ["Special Tiffin"],
             "assigned_users": [request["user_id"]],
-            "created_at": datetime.now(IST),
-            "updated_at": datetime.now(IST),
+            "created_at": current_time,
+            "updated_at": current_time,
             "special_request": True,
             "request_id": str(request["_id"])
         }
         
-        result = db.tiffins.insert_one(tiffin)
+        result = await db.tiffins.insert_one(tiffin)
+        tiffin_id = str(result.inserted_id)
         
         # Update request status
-        db.tiffin_requests.update_one(
+        await db.tiffin_requests.update_one(
             {"_id": ObjectId(request_id)},
             {
                 "$set": {
                     "status": RequestStatus.APPROVED,
-                    "approved_at": datetime.now(IST),
-                    "tiffin_id": str(result.inserted_id)
+                    "approved_at": current_time,
+                    "tiffin_id": tiffin_id
                 }
             }
         )
@@ -2094,13 +2228,13 @@ async def approve_tiffin_request(
             "message": f"Your special tiffin request for {approval.date} ({approval.time}) has been approved.",
             "type": "success",
             "read": False,
-            "created_at": datetime.now(IST)
+            "created_at": current_time
         }
-        db.notifications.insert_one(notification)
+        await db.notifications.insert_one(notification)
         
         return {
             "status": "success",
-            "tiffin_id": str(result.inserted_id)
+            "tiffin_id": tiffin_id
         }
     except HTTPException:
         raise
@@ -2124,7 +2258,7 @@ async def reject_tiffin_request(
             )
             
         # Get the request
-        request = db.tiffin_requests.find_one({"_id": ObjectId(request_id)})
+        request = await db.tiffin_requests.find_one({"_id": ObjectId(request_id)})
         if not request:
             raise HTTPException(
                 status_code=404,
@@ -2139,12 +2273,13 @@ async def reject_tiffin_request(
             )
             
         # Update request status
-        db.tiffin_requests.update_one(
+        current_time = datetime.now(IST)
+        await db.tiffin_requests.update_one(
             {"_id": ObjectId(request_id)},
             {
                 "$set": {
                     "status": RequestStatus.REJECTED,
-                    "rejected_at": datetime.now(IST),
+                    "rejected_at": current_time,
                     "rejection_reason": reason
                 }
             }
@@ -2161,9 +2296,9 @@ async def reject_tiffin_request(
             "message": message,
             "type": "warning",
             "read": False,
-            "created_at": datetime.now(IST)
+            "created_at": current_time
         }
-        db.notifications.insert_one(notification)
+        await db.notifications.insert_one(notification)
         
         return {"status": "success"}
     except HTTPException:
@@ -2179,32 +2314,39 @@ async def reject_tiffin_request(
 async def create_notice(notice: Notice, _: bool = Depends(verify_admin)):
     try:
         notice_dict = notice.dict()
-        result = db.notices.insert_one(notice_dict)
+        result = await db.notices.insert_one(notice_dict)
+        notice_id = str(result.inserted_id)
         
         # Create notifications for all active users
-        users = list(db.users.find({"active": True}, {"user_id": 1}))
+        active_users = await db.users.find({"active": True}, {"user_id": 1}).to_list(length=1000)
         
-        priority_text = "Normal"
-        if notice.priority == 1:
-            priority_text = "Important"
-        elif notice.priority == 2:
-            priority_text = "Urgent"
+        if active_users:
+            priority_text = "Normal"
+            if notice.priority == 1:
+                priority_text = "Important"
+            elif notice.priority == 2:
+                priority_text = "Urgent"
+                
+            current_time = datetime.now(IST)
+            notifications = []
             
-        for user in users:
-            notification = {
-                "user_id": user["user_id"],
-                "title": f"New {priority_text} Notice",
-                "message": notice.title,
-                "type": "info" if notice.priority == 0 else "warning" if notice.priority == 1 else "error",
-                "read": False,
-                "created_at": datetime.now(IST),
-                "notice_id": str(result.inserted_id)
-            }
-            db.notifications.insert_one(notification)
+            for user in active_users:
+                notifications.append({
+                    "user_id": user["user_id"],
+                    "title": f"New {priority_text} Notice",
+                    "message": notice.title,
+                    "type": "info" if notice.priority == 0 else "warning" if notice.priority == 1 else "error",
+                    "read": False,
+                    "created_at": current_time,
+                    "notice_id": notice_id
+                })
+                
+            if notifications:
+                await db.notifications.insert_many(notifications)
         
         return {
             "status": "success",
-            "notice_id": str(result.inserted_id)
+            "notice_id": notice_id
         }
     except Exception as e:
         raise HTTPException(
@@ -2219,21 +2361,20 @@ async def get_all_notices(
     _: bool = Depends(verify_admin)
 ):
     try:
-        # Get total count for pagination
-        total_count = db.notices.count_documents({})
-        
         # Get notices with pagination
-        notices = list(db.notices.find().sort("created_at", -1).skip(skip).limit(limit))
+        notices = await db.notices.find().sort("created_at", -1).skip(skip).limit(limit).to_list(length=limit)
+        
+        # Get total count for pagination
+        total_count = await db.notices.count_documents({})
         
         # Serialize notices
-        for notice in notices:
-            notice["_id"] = str(notice["_id"])
+        serialized_notices = [serialize_doc(notice) for notice in notices]
             
         return {
             "total": total_count,
             "skip": skip,
             "limit": limit,
-            "data": notices
+            "data": serialized_notices
         }
     except Exception as e:
         raise HTTPException(
@@ -2256,21 +2397,23 @@ async def get_user_notices(
             ]
         }
         
-        # Get total count for pagination
-        total_count = db.notices.count_documents(query)
+        # Get notices with pagination and sorting by priority and date
+        notices = await db.notices.find(query).sort([
+            ("priority", -1), 
+            ("created_at", -1)
+        ]).skip(skip).limit(limit).to_list(length=limit)
         
-        # Get notices with pagination
-        notices = list(db.notices.find(query).sort("priority", -1).sort("created_at", -1).skip(skip).limit(limit))
+        # Get total count for pagination
+        total_count = await db.notices.count_documents(query)
         
         # Serialize notices
-        for notice in notices:
-            notice["_id"] = str(notice["_id"])
+        serialized_notices = [serialize_doc(notice) for notice in notices]
             
         return {
             "total": total_count,
             "skip": skip,
             "limit": limit,
-            "data": notices
+            "data": serialized_notices
         }
     except Exception as e:
         raise HTTPException(
@@ -2290,7 +2433,7 @@ async def get_notice_by_id(
                 detail="Invalid notice ID format"
             )
             
-        notice = db.notices.find_one({"_id": ObjectId(notice_id)})
+        notice = await db.notices.find_one({"_id": ObjectId(notice_id)})
         
         if not notice:
             raise HTTPException(
@@ -2298,8 +2441,7 @@ async def get_notice_by_id(
                 detail="Notice not found"
             )
         
-        notice["_id"] = str(notice["_id"])
-        return notice
+        return serialize_doc(notice)
     except HTTPException:
         raise
     except Exception as e:
@@ -2330,7 +2472,7 @@ async def update_notice(
                 detail="No valid updates provided"
             )
         
-        result = db.notices.update_one(
+        result = await db.notices.update_one(
             {"_id": ObjectId(notice_id)},
             {"$set": update_data}
         )
@@ -2359,7 +2501,7 @@ async def delete_notice(notice_id: str, _: bool = Depends(verify_admin)):
                 detail="Invalid notice ID format"
             )
             
-        result = db.notices.delete_one({"_id": ObjectId(notice_id)})
+        result = await db.notices.delete_one({"_id": ObjectId(notice_id)})
         if result.deleted_count == 0:
             raise HTTPException(
                 status_code=404,
@@ -2367,7 +2509,7 @@ async def delete_notice(notice_id: str, _: bool = Depends(verify_admin)):
             )
             
         # Delete related notifications
-        db.notifications.delete_many({"notice_id": notice_id})
+        await db.notifications.delete_many({"notice_id": notice_id})
         
         return {"status": "success"}
     except HTTPException:
@@ -2383,26 +2525,33 @@ async def delete_notice(notice_id: str, _: bool = Depends(verify_admin)):
 async def create_poll(poll: Poll, _: bool = Depends(verify_admin)):
     try:
         poll_dict = poll.dict()
-        result = db.polls.insert_one(poll_dict)
+        result = await db.polls.insert_one(poll_dict)
+        poll_id = str(result.inserted_id)
         
         # Create notifications for all active users
-        users = list(db.users.find({"active": True}, {"user_id": 1}))
+        active_users = await db.users.find({"active": True}, {"user_id": 1}).to_list(length=1000)
         
-        for user in users:
-            notification = {
-                "user_id": user["user_id"],
-                "title": "New Poll Available",
-                "message": f"A new poll is available: {poll.question}",
-                "type": "info",
-                "read": False,
-                "created_at": datetime.now(IST),
-                "poll_id": str(result.inserted_id)
-            }
-            db.notifications.insert_one(notification)
+        if active_users:
+            current_time = datetime.now(IST)
+            notifications = []
+            
+            for user in active_users:
+                notifications.append({
+                    "user_id": user["user_id"],
+                    "title": "New Poll Available",
+                    "message": f"A new poll is available: {poll.question}",
+                    "type": "info",
+                    "read": False,
+                    "created_at": current_time,
+                    "poll_id": poll_id
+                })
+                
+            if notifications:
+                await db.notifications.insert_many(notifications)
         
         return {
             "status": "success",
-            "poll_id": str(result.inserted_id)
+            "poll_id": poll_id
         }
     except Exception as e:
         raise HTTPException(
@@ -2417,21 +2566,20 @@ async def get_all_polls(
     _: bool = Depends(verify_admin)
 ):
     try:
-        # Get total count for pagination
-        total_count = db.polls.count_documents({})
-        
         # Get polls with pagination
-        polls = list(db.polls.find().sort("end_date", -1).skip(skip).limit(limit))
+        polls = await db.polls.find().sort("end_date", -1).skip(skip).limit(limit).to_list(length=limit)
+        
+        # Get total count for pagination
+        total_count = await db.polls.count_documents({})
         
         # Serialize polls
-        for poll in polls:
-            poll["_id"] = str(poll["_id"])
+        serialized_polls = [serialize_doc(poll) for poll in polls]
             
         return {
             "total": total_count,
             "skip": skip,
             "limit": limit,
-            "data": polls
+            "data": serialized_polls
         }
     except Exception as e:
         raise HTTPException(
@@ -2454,26 +2602,38 @@ async def get_poll_votes(
             )
         
         # Get the poll to verify it exists
-        poll = db.polls.find_one({"_id": ObjectId(poll_id)})
+        poll = await db.polls.find_one({"_id": ObjectId(poll_id)})
         if not poll:
             raise HTTPException(
                 status_code=404,
                 detail="Poll not found"
             )
         
-        # Get total count for pagination
-        total_count = db.poll_votes.count_documents({"poll_id": ObjectId(poll_id)})
-        
         # Get votes with pagination
-        votes = list(db.poll_votes.find({"poll_id": ObjectId(poll_id)}).skip(skip).limit(limit))
+        votes = await db.poll_votes.find(
+            {"poll_id": ObjectId(poll_id)}
+        ).skip(skip).limit(limit).to_list(length=limit)
         
-        # Get user details for each vote
+        # Get total count for pagination
+        total_count = await db.poll_votes.count_documents({"poll_id": ObjectId(poll_id)})
+        
+        # Get user details for votes efficiently
+        user_ids = [vote["user_id"] for vote in votes]
+        users = await db.users.find(
+            {"user_id": {"$in": user_ids}}, 
+            {"name": 1, "user_id": 1}
+        ).to_list(length=len(user_ids))
+        
+        # Create a user lookup map
+        user_map = {user["user_id"]: user for user in users}
+        
+        # Build detailed votes with user info
         detailed_votes = []
         for vote in votes:
-            user = db.users.find_one({"user_id": vote["user_id"]}, {"name": 1, "user_id": 1})
+            user = user_map.get(vote["user_id"], {})
             detailed_vote = {
                 "user_id": vote["user_id"],
-                "user_name": user["name"] if user else "Unknown User",
+                "user_name": user.get("name", "Unknown User"),
                 "option_index": vote["option_index"],
                 "voted_at": vote["voted_at"]
             }
@@ -2508,36 +2668,46 @@ async def get_active_polls(
             "end_date": {"$gt": current_time}
         }
         
-        # Get total count for pagination
-        total_count = db.polls.count_documents(query)
-        
         # Get polls with pagination
-        polls = list(db.polls.find(query).skip(skip).limit(limit))
+        polls = await db.polls.find(query).skip(skip).limit(limit).to_list(length=limit)
+        
+        # Get total count for pagination
+        total_count = await db.polls.count_documents(query)
+        
+        # Get user votes for all polls in one query
+        poll_ids = [ObjectId(poll["_id"]) for poll in polls]
+        user_votes = await db.poll_votes.find({
+            "poll_id": {"$in": poll_ids},
+            "user_id": user_id
+        }).to_list(length=len(poll_ids))
+        
+        # Create a vote lookup map
+        vote_map = {str(vote["poll_id"]): vote for vote in user_votes}
         
         # For each poll, check if user has already voted
+        serialized_polls = []
         for poll in polls:
-            poll["_id"] = str(poll["_id"])
+            poll_id_str = str(poll["_id"])
+            serialized_poll = serialize_doc(poll)
             
             # Check if user has already voted
-            vote = db.poll_votes.find_one({
-                "poll_id": ObjectId(poll["_id"]),
-                "user_id": user_id
-            })
-            
-            poll["has_voted"] = vote is not None
+            vote = vote_map.get(poll_id_str)
+            serialized_poll["has_voted"] = vote is not None
             if vote:
-                poll["user_vote"] = vote["option_index"]
+                serialized_poll["user_vote"] = vote["option_index"]
             
             # For non-admin users, don't show vote counts
             if user_id != ADMIN_ID:
-                for option in poll["options"]:
+                for option in serialized_poll["options"]:
                     option["votes"] = 0
+                    
+            serialized_polls.append(serialized_poll)
         
         return {
             "total": total_count,
             "skip": skip,
             "limit": limit,
-            "data": polls
+            "data": serialized_polls
         }
     except Exception as e:
         raise HTTPException(
@@ -2557,7 +2727,7 @@ async def get_poll_by_id(
                 detail="Invalid poll ID format"
             )
             
-        poll = db.polls.find_one({"_id": ObjectId(poll_id)})
+        poll = await db.polls.find_one({"_id": ObjectId(poll_id)})
         
         if not poll:
             raise HTTPException(
@@ -2565,19 +2735,19 @@ async def get_poll_by_id(
                 detail="Poll not found"
             )
         
-        poll["_id"] = str(poll["_id"])
+        serialized_poll = serialize_doc(poll)
         
         # Check if user has already voted
-        vote = db.poll_votes.find_one({
+        vote = await db.poll_votes.find_one({
             "poll_id": ObjectId(poll_id),
             "user_id": user_id
         })
         
-        poll["has_voted"] = vote is not None
+        serialized_poll["has_voted"] = vote is not None
         if vote:
-            poll["user_vote"] = vote["option_index"]
+            serialized_poll["user_vote"] = vote["option_index"]
         
-        return poll
+        return serialized_poll
     except HTTPException:
         raise
     except Exception as e:
@@ -2601,7 +2771,7 @@ async def vote_poll(
             
         # Check if poll exists and is active
         current_time = datetime.now(IST)
-        poll = db.polls.find_one({
+        poll = await db.polls.find_one({
             "_id": ObjectId(poll_id),
             "active": True,
             "start_date": {"$lte": current_time},
@@ -2616,7 +2786,7 @@ async def vote_poll(
         
         # Check if user already voted (skip for admin)
         if user_id != ADMIN_ID:
-            existing_vote = db.poll_votes.find_one({
+            existing_vote = await db.poll_votes.find_one({
                 "poll_id": ObjectId(poll_id),
                 "user_id": user_id
             })
@@ -2636,15 +2806,16 @@ async def vote_poll(
         
         # Record vote (skip for admin to avoid skewing results)
         if user_id != ADMIN_ID:
-            db.poll_votes.insert_one({
+            # Use transactions for vote recording and counter update
+            await db.poll_votes.insert_one({
                 "poll_id": ObjectId(poll_id),
                 "user_id": user_id,
                 "option_index": option_index,
-                "voted_at": datetime.now(IST)
+                "voted_at": current_time
             })
             
             # Update poll results
-            db.polls.update_one(
+            await db.polls.update_one(
                 {"_id": ObjectId(poll_id)},
                 {"$inc": {f"options.{option_index}.votes": 1}}
             )
@@ -2685,14 +2856,14 @@ async def update_poll(
         
         # Don't allow changing options if votes already exist
         if "options" in update_data:
-            vote_count = db.poll_votes.count_documents({"poll_id": ObjectId(poll_id)})
+            vote_count = await db.poll_votes.count_documents({"poll_id": ObjectId(poll_id)})
             if vote_count > 0:
                 raise HTTPException(
                     status_code=400,
                     detail="Cannot modify poll options after voting has started"
                 )
         
-        result = db.polls.update_one(
+        result = await db.polls.update_one(
             {"_id": ObjectId(poll_id)},
             {"$set": update_data}
         )
@@ -2722,18 +2893,18 @@ async def delete_poll(poll_id: str, _: bool = Depends(verify_admin)):
             )
             
         # Delete poll
-        result = db.polls.delete_one({"_id": ObjectId(poll_id)})
+        result = await db.polls.delete_one({"_id": ObjectId(poll_id)})
         if result.deleted_count == 0:
             raise HTTPException(
                 status_code=404,
                 detail="Poll not found"
             )
             
-        # Delete all votes for this poll
-        db.poll_votes.delete_many({"poll_id": ObjectId(poll_id)})
-        
-        # Delete related notifications
-        db.notifications.delete_many({"poll_id": poll_id})
+        # Delete all votes for this poll and related notifications in parallel
+        await asyncio.gather(
+            db.poll_votes.delete_many({"poll_id": ObjectId(poll_id)}),
+            db.notifications.delete_many({"poll_id": poll_id})
+        )
         
         return {"status": "success"}
     except HTTPException:
@@ -2762,34 +2933,37 @@ async def generate_invoices(
                 detail="Invalid date format. Use YYYY-MM-DD"
             )
             
-        users = list(db.users.find({"active": True}))
+        users = await db.users.find({"active": True}, {"user_id": 1}).to_list(length=1000)
         generated_invoices = []
+        current_time = datetime.now(IST)
         
         for user in users:
+            user_id = user["user_id"]
+            
             # Get user's DELIVERED tiffins for the period
-            tiffins = list(db.tiffins.find({
-                "assigned_users": user["user_id"],
+            tiffins = await db.tiffins.find({
+                "assigned_users": user_id,
                 "date": {"$gte": start_date, "$lte": end_date},
                 "status": TiffinStatus.DELIVERED
-            }))
+            }).to_list(length=100)
             
             if tiffins:
                 # Check if an invoice already exists for this period and user
-                existing_invoice = db.invoices.find_one({
-                    "user_id": user["user_id"],
+                existing_invoice = await db.invoices.find_one({
+                    "user_id": user_id,
                     "start_date": start_date,
                     "end_date": end_date
                 })
                 
                 if existing_invoice:
                     # Update existing invoice
-                    db.invoices.update_one(
+                    await db.invoices.update_one(
                         {"_id": existing_invoice["_id"]},
                         {
                             "$set": {
                                 "tiffins": [str(t["_id"]) for t in tiffins],
-                                "total_amount": sum(t["price"] for t in tiffins),
-                                "updated_at": datetime.now(IST)
+                                "total_amount": sum(t.get("price", 0) for t in tiffins),
+                                "updated_at": current_time
                             }
                         }
                     )
@@ -2797,27 +2971,28 @@ async def generate_invoices(
                 else:
                     # Create new invoice
                     invoice = Invoice(
-                        user_id=user["user_id"],
+                        user_id=user_id,
                         start_date=start_date,
                         end_date=end_date,
                         tiffins=[str(t["_id"]) for t in tiffins],
-                        total_amount=sum(t["price"] for t in tiffins)
+                        total_amount=sum(t.get("price", 0) for t in tiffins)
                     )
                     
-                    result = db.invoices.insert_one(invoice.dict())
-                    generated_invoices.append(str(result.inserted_id))
+                    result = await db.invoices.insert_one(invoice.dict())
+                    invoice_id = str(result.inserted_id)
+                    generated_invoices.append(invoice_id)
                     
                     # Create notification for user
                     notification = {
-                        "user_id": user["user_id"],
+                        "user_id": user_id,
                         "title": "New Invoice Generated",
                         "message": f"A new invoice has been generated for the period {start_date} to {end_date}.",
                         "type": "info",
                         "read": False,
-                        "created_at": datetime.now(IST),
-                        "invoice_id": str(result.inserted_id)
+                        "created_at": current_time,
+                        "invoice_id": invoice_id
                     }
-                    db.notifications.insert_one(notification)
+                    await db.notifications.insert_one(notification)
         
         return {
             "status": "success",
@@ -2870,26 +3045,40 @@ async def get_all_invoices(
                     detail="Invalid end_date format. Use YYYY-MM-DD"
                 )
         
-        # Get total count for pagination
-        total_count = db.invoices.count_documents(query)
-        
         # Get invoices with pagination
-        invoices = list(db.invoices.find(query).sort("generated_at", -1).skip(skip).limit(limit))
+        invoices = await db.invoices.find(query).sort("generated_at", -1).skip(skip).limit(limit).to_list(length=limit)
+        
+        # Get total count for pagination
+        total_count = await db.invoices.count_documents(query)
+        
+        # Collect user IDs to fetch in batch
+        user_ids = list(set(invoice["user_id"] for invoice in invoices))
+        
+        # Get user details in batch
+        users = {}
+        if user_ids:
+            user_docs = await db.users.find(
+                {"user_id": {"$in": user_ids}}, 
+                {"password": 0, "api_key": 0}
+            ).to_list(length=len(user_ids))
+            
+            users = {user["user_id"]: serialize_doc(user) for user in user_docs}
         
         # Add user details to each invoice
+        serialized_invoices = []
         for invoice in invoices:
-            invoice["_id"] = str(invoice["_id"])
+            serialized_invoice = serialize_doc(invoice)
             
-            user = db.users.find_one({"user_id": invoice["user_id"]}, {"password": 0, "api_key": 0})
-            if user:
-                user["_id"] = str(user["_id"])
-                invoice["user_details"] = user
+            if invoice["user_id"] in users:
+                serialized_invoice["user_details"] = users[invoice["user_id"]]
+                
+            serialized_invoices.append(serialized_invoice)
         
         return {
             "total": total_count,
             "skip": skip,
             "limit": limit,
-            "data": invoices
+            "data": serialized_invoices
         }
     except HTTPException:
         raise
@@ -2911,7 +3100,7 @@ async def get_invoice_by_id(
                 detail="Invalid invoice ID format"
             )
             
-        invoice = db.invoices.find_one({"_id": ObjectId(invoice_id)})
+        invoice = await db.invoices.find_one({"_id": ObjectId(invoice_id)})
         
         if not invoice:
             raise HTTPException(
@@ -2919,26 +3108,33 @@ async def get_invoice_by_id(
                 detail="Invoice not found"
             )
             
-        invoice["_id"] = str(invoice["_id"])
+        serialized_invoice = serialize_doc(invoice)
         
         # Get user details
-        user = db.users.find_one({"user_id": invoice["user_id"]}, {"password": 0, "api_key": 0})
+        user = await db.users.find_one(
+            {"user_id": invoice["user_id"]}, 
+            {"password": 0, "api_key": 0}
+        )
+        
         if user:
-            user["_id"] = str(user["_id"])
-            invoice["user_details"] = user
+            serialized_invoice["user_details"] = serialize_doc(user)
             
         # Get tiffin details
-        tiffin_details = []
-        for tiffin_id in invoice["tiffins"]:
-            if is_valid_object_id(tiffin_id):
-                tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
-                if tiffin:
-                    tiffin["_id"] = str(tiffin["_id"])
-                    tiffin_details.append(tiffin)
+        valid_tiffin_ids = [
+            ObjectId(tiffin_id) for tiffin_id in invoice["tiffins"] 
+            if is_valid_object_id(tiffin_id)
+        ]
         
-        invoice["tiffin_details"] = tiffin_details
+        if valid_tiffin_ids:
+            tiffins = await db.tiffins.find(
+                {"_id": {"$in": valid_tiffin_ids}}
+            ).to_list(length=len(valid_tiffin_ids))
+            
+            serialized_invoice["tiffin_details"] = [serialize_doc(tiffin) for tiffin in tiffins]
+        else:
+            serialized_invoice["tiffin_details"] = []
         
-        return invoice
+        return serialized_invoice
     except HTTPException:
         raise
     except Exception as e:
@@ -2964,25 +3160,28 @@ async def get_user_invoices(
         if paid is not None:
             query["paid"] = paid
         
-        # Get total count for pagination
-        total_count = db.invoices.count_documents(query)
-        
         # Get invoices with pagination
-        invoices = list(db.invoices.find(query).sort("generated_at", -1).skip(skip).limit(limit))
+        invoices = await db.invoices.find(query).sort("generated_at", -1).skip(skip).limit(limit).to_list(length=limit)
         
-        # Serialize invoices
+        # Get total count for pagination
+        total_count = await db.invoices.count_documents(query)
+        
+        # Serialize invoices and add tiffin count
+        serialized_invoices = []
         for invoice in invoices:
-            invoice["_id"] = str(invoice["_id"])
+            serialized_invoice = serialize_doc(invoice)
             
-            # Get tiffin count and details
-            tiffin_ids = [ObjectId(t_id) for t_id in invoice["tiffins"] if is_valid_object_id(t_id)]
-            invoice["tiffin_count"] = len(tiffin_ids)
+            # Add tiffin count
+            tiffin_ids = [t_id for t_id in invoice["tiffins"] if is_valid_object_id(t_id)]
+            serialized_invoice["tiffin_count"] = len(tiffin_ids)
+            
+            serialized_invoices.append(serialized_invoice)
             
         return {
             "total": total_count,
             "skip": skip,
             "limit": limit,
-            "data": invoices
+            "data": serialized_invoices
         }
     except Exception as e:
         raise HTTPException(
@@ -3007,7 +3206,7 @@ async def get_user_invoice_by_id(
         if user_id != ADMIN_ID:
             query["user_id"] = user_id
             
-        invoice = db.invoices.find_one(query)
+        invoice = await db.invoices.find_one(query)
         
         if not invoice:
             raise HTTPException(
@@ -3015,20 +3214,24 @@ async def get_user_invoice_by_id(
                 detail="Invoice not found"
             )
             
-        invoice["_id"] = str(invoice["_id"])
+        serialized_invoice = serialize_doc(invoice)
         
         # Get tiffin details
-        tiffin_details = []
-        for tiffin_id in invoice["tiffins"]:
-            if is_valid_object_id(tiffin_id):
-                tiffin = db.tiffins.find_one({"_id": ObjectId(tiffin_id)})
-                if tiffin:
-                    tiffin["_id"] = str(tiffin["_id"])
-                    tiffin_details.append(tiffin)
+        valid_tiffin_ids = [
+            ObjectId(tiffin_id) for tiffin_id in invoice["tiffins"] 
+            if is_valid_object_id(tiffin_id)
+        ]
         
-        invoice["tiffin_details"] = tiffin_details
+        if valid_tiffin_ids:
+            tiffins = await db.tiffins.find(
+                {"_id": {"$in": valid_tiffin_ids}}
+            ).to_list(length=len(valid_tiffin_ids))
+            
+            serialized_invoice["tiffin_details"] = [serialize_doc(tiffin) for tiffin in tiffins]
+        else:
+            serialized_invoice["tiffin_details"] = []
         
-        return invoice
+        return serialized_invoice
     except HTTPException:
         raise
     except Exception as e:
@@ -3050,7 +3253,7 @@ async def mark_invoice_paid(
             )
             
         # Get invoice first to check if it's already paid
-        invoice = db.invoices.find_one({"_id": ObjectId(invoice_id)})
+        invoice = await db.invoices.find_one({"_id": ObjectId(invoice_id)})
         if not invoice:
             raise HTTPException(
                 status_code=404,
@@ -3060,9 +3263,10 @@ async def mark_invoice_paid(
         if invoice.get("paid", False):
             return {"status": "success", "message": "Invoice was already marked as paid"}
             
-        result = db.invoices.update_one(
+        current_time = datetime.now(IST)
+        result = await db.invoices.update_one(
             {"_id": ObjectId(invoice_id)},
-            {"$set": {"paid": True, "paid_at": datetime.now(IST)}}
+            {"$set": {"paid": True, "paid_at": current_time}}
         )
         
         # Notify user
@@ -3072,10 +3276,10 @@ async def mark_invoice_paid(
             "message": f"Your payment for invoice #{invoice_id[:8]} has been received.",
             "type": "success",
             "read": False,
-            "created_at": datetime.now(IST),
+            "created_at": current_time,
             "invoice_id": invoice_id
         }
-        db.notifications.insert_one(notification)
+        await db.notifications.insert_one(notification)
         
         return {"status": "success"}
     except HTTPException:
@@ -3098,7 +3302,7 @@ async def delete_invoice(
                 detail="Invalid invoice ID format"
             )
             
-        result = db.invoices.delete_one({"_id": ObjectId(invoice_id)})
+        result = await db.invoices.delete_one({"_id": ObjectId(invoice_id)})
         
         if result.deleted_count == 0:
             raise HTTPException(
@@ -3107,7 +3311,7 @@ async def delete_invoice(
             )
             
         # Delete related notifications
-        db.notifications.delete_many({"invoice_id": invoice_id})
+        await db.notifications.delete_many({"invoice_id": invoice_id})
         
         return {"status": "success"}
     except HTTPException:
@@ -3132,24 +3336,23 @@ async def get_user_notifications(
         if read is not None:
             query["read"] = read
         
-        # Get total count for pagination
-        total_count = db.notifications.count_documents(query)
-            
         # Get notifications with pagination
-        notifications = list(db.notifications.find(query).sort("created_at", -1).skip(skip).limit(limit))
+        notifications = await db.notifications.find(query).sort("created_at", -1).skip(skip).limit(limit).to_list(length=limit)
+        
+        # Get total and unread count in parallel
+        total_count, unread_count = await asyncio.gather(
+            db.notifications.count_documents(query),
+            db.notifications.count_documents({"user_id": user_id, "read": False})
+        )
         
         # Serialize notifications
-        for notification in notifications:
-            notification["_id"] = str(notification["_id"])
-            
-        # Get unread count
-        unread_count = db.notifications.count_documents({"user_id": user_id, "read": False})
+        serialized_notifications = [serialize_doc(notification) for notification in notifications]
             
         return {
             "total": total_count,
             "skip": skip,
             "limit": limit,
-            "notifications": notifications,
+            "notifications": serialized_notifications,
             "unread_count": unread_count
         }
     except Exception as e:
@@ -3165,16 +3368,13 @@ async def mark_notifications_read(
 ):
     try:
         # Convert string IDs to ObjectIds
-        object_ids = []
-        for nid in notification_ids:
-            if is_valid_object_id(nid):
-                object_ids.append(ObjectId(nid))
+        object_ids = [ObjectId(nid) for nid in notification_ids if is_valid_object_id(nid)]
         
         if not object_ids:
             return {"status": "success", "marked_count": 0}
             
         # Only mark notifications that belong to the user
-        result = db.notifications.update_many(
+        result = await db.notifications.update_many(
             {
                 "_id": {"$in": object_ids},
                 "user_id": user_id
@@ -3195,7 +3395,7 @@ async def mark_notifications_read(
 @app.post("/user/notifications/mark-all-read")
 async def mark_all_notifications_read(user_id: str = Depends(verify_user)):
     try:
-        result = db.notifications.update_many(
+        result = await db.notifications.update_many(
             {"user_id": user_id, "read": False},
             {"$set": {"read": True}}
         )
@@ -3223,7 +3423,7 @@ async def delete_notification(
             )
             
         # Only delete notification if it belongs to the user
-        result = db.notifications.delete_one({
+        result = await db.notifications.delete_one({
             "_id": ObjectId(notification_id),
             "user_id": user_id
         })
@@ -3250,36 +3450,32 @@ async def get_dashboard_stats(_: bool = Depends(verify_admin)):
         today = datetime.now(IST).strftime("%Y-%m-%d")
         current_month_start = datetime.now(IST).replace(day=1).strftime("%Y-%m-%d")
         
-        # Calculate various stats
-        total_users = db.users.count_documents({"active": True})
-        
-        active_tiffins = db.tiffins.count_documents({
-            "date": today,
-            "status": {"$nin": [TiffinStatus.DELIVERED, TiffinStatus.CANCELLED]}
-        })
-        
-        today_deliveries = db.tiffins.count_documents({
-            "date": today,
-            "status": TiffinStatus.DELIVERED
-        })
+        # Calculate various stats in parallel
+        total_users, active_tiffins, today_deliveries, pending_requests, unpaid_invoices = await asyncio.gather(
+            db.users.count_documents({"active": True}),
+            db.tiffins.count_documents({
+                "date": today,
+                "status": {"$nin": [TiffinStatus.DELIVERED, TiffinStatus.CANCELLED]}
+            }),
+            db.tiffins.count_documents({
+                "date": today,
+                "status": TiffinStatus.DELIVERED
+            }),
+            db.tiffin_requests.count_documents({"status": RequestStatus.PENDING}),
+            db.invoices.count_documents({"paid": False})
+        )
         
         # Calculate monthly revenue
-        monthly_tiffins = list(db.tiffins.find({
+        monthly_tiffins = await db.tiffins.find({
             "date": {"$gte": current_month_start, "$lte": today},
             "status": {"$ne": TiffinStatus.CANCELLED}
-        }))
+        }, {"price": 1}).to_list(length=1000)
         
         monthly_revenue = sum(t.get("price", 0) for t in monthly_tiffins)
         
-        # Get pending requests count
-        pending_requests = db.tiffin_requests.count_documents({"status": RequestStatus.PENDING})
-        
-        # Get unpaid invoices count
-        unpaid_invoices = db.invoices.count_documents({"paid": False})
-        
         # Get user growth (new users in the last 30 days)
         thirty_days_ago = (datetime.now(IST) - timedelta(days=30)).isoformat()
-        new_users = db.users.count_documents({
+        new_users = await db.users.count_documents({
             "created_at": {"$gte": thirty_days_ago}
         })
         
@@ -3303,7 +3499,7 @@ async def get_dashboard_stats(_: bool = Depends(verify_admin)):
 @app.get("/admin/user/{user_id}/stats")
 async def get_user_stats(user_id: str, _: bool = Depends(verify_admin)):
     try:
-        user = db.users.find_one({"user_id": user_id})
+        user = await db.users.find_one({"user_id": user_id})
         if not user:
             raise HTTPException(
                 status_code=404,
@@ -3311,7 +3507,7 @@ async def get_user_stats(user_id: str, _: bool = Depends(verify_admin)):
             )
         
         # Get all tiffins for this user
-        tiffins = list(db.tiffins.find({"assigned_users": user_id}))
+        tiffins = await db.tiffins.find({"assigned_users": user_id}).to_list(length=1000)
         
         # Calculate current month tiffins
         current_month_start = datetime.now(IST).replace(day=1).strftime("%Y-%m-%d")
@@ -3358,10 +3554,10 @@ async def get_user_dashboard_stats(user_id: str = Depends(verify_user)):
         current_month_start = datetime.now(IST).replace(day=1).strftime("%Y-%m-%d")
         
         # Get today's tiffins
-        today_tiffins = list(db.tiffins.find({
+        today_tiffins = await db.tiffins.find({
             "assigned_users": user_id,
             "date": today
-        }).sort("time", 1))
+        }).sort("time", 1).to_list(length=10)
         
         # Get next delivery time
         next_delivery = None
@@ -3381,7 +3577,7 @@ async def get_user_dashboard_stats(user_id: str = Depends(verify_user)):
         
         # If no upcoming delivery today, find the next day's first delivery
         if not next_delivery:
-            next_day_tiffin = db.tiffins.find_one({
+            next_day_tiffin = await db.tiffins.find_one({
                 "assigned_users": user_id,
                 "date": {"$gt": today},
                 "status": {"$ne": TiffinStatus.CANCELLED}
@@ -3395,36 +3591,40 @@ async def get_user_dashboard_stats(user_id: str = Depends(verify_user)):
                     # If no delivery time, just show the date and time of day
                     next_delivery = f"{next_day_tiffin['date']} ({next_day_tiffin.get('time', 'unknown')})"
         
-        # Get current month tiffins
-        current_month_tiffins = list(db.tiffins.find({
-            "assigned_users": user_id,
-            "date": {"$gte": current_month_start, "$lte": today}
-        }))
-        
-        # Get pending invoices
-        pending_invoices = db.invoices.count_documents({
-            "user_id": user_id,
-            "paid": False
-        })
-        
-        # Get upcoming tiffins (next 7 days)
-        week_end = (datetime.now(IST) + timedelta(days=7)).strftime("%Y-%m-%d")
-        upcoming_tiffins = db.tiffins.count_documents({
-            "assigned_users": user_id,
-            "date": {"$gt": today, "$lte": week_end},
-            "status": {"$ne": TiffinStatus.CANCELLED}
-        })
-        
-        # Get unread notifications
-        unread_notifications = db.notifications.count_documents({
-            "user_id": user_id,
-            "read": False
-        })
+        # Execute parallel queries for better performance
+        current_month_tiffins, pending_invoices_count, upcoming_tiffins_count, unread_notifications_count = await asyncio.gather(
+            # Get current month tiffins
+            db.tiffins.find({
+                "assigned_users": user_id,
+                "date": {"$gte": current_month_start, "$lte": today}
+            }).to_list(length=100),
+            
+            # Get pending invoices count
+            db.invoices.count_documents({
+                "user_id": user_id,
+                "paid": False
+            }),
+            
+            # Get upcoming tiffins count (next 7 days)
+            db.tiffins.count_documents({
+                "assigned_users": user_id,
+                "date": {"$gt": today, "$lte": (datetime.now(IST) + timedelta(days=7)).strftime("%Y-%m-%d")},
+                "status": {"$ne": TiffinStatus.CANCELLED}
+            }),
+            
+            # Get unread notifications count
+            db.notifications.count_documents({
+                "user_id": user_id,
+                "read": False
+            })
+        )
         
         # Calculate month spent safely
         month_spent = 0
+        month_tiffins_count = 0
         for t in current_month_tiffins:
             if t.get("status") != TiffinStatus.CANCELLED:
+                month_tiffins_count += 1
                 try:
                     month_spent += float(t.get("price", 0))
                 except (ValueError, TypeError):
@@ -3433,11 +3633,11 @@ async def get_user_dashboard_stats(user_id: str = Depends(verify_user)):
         stats = {
             "today_tiffins": len(today_tiffins),
             "next_delivery": next_delivery,
-            "month_tiffins": len([t for t in current_month_tiffins if t.get("status") != TiffinStatus.CANCELLED]),
+            "month_tiffins": month_tiffins_count,
             "month_spent": month_spent,
-            "pending_invoices": pending_invoices,
-            "upcoming_tiffins": upcoming_tiffins,
-            "unread_notifications": unread_notifications
+            "pending_invoices": pending_invoices_count,
+            "upcoming_tiffins": upcoming_tiffins_count,
+            "unread_notifications": unread_notifications_count
         }
         
         return stats
@@ -3453,19 +3653,21 @@ async def get_user_dashboard_stats(user_id: str = Depends(verify_user)):
 async def check_system_health(_: bool = Depends(verify_admin)):
     """Check system health and database status"""
     try:
-        db_status = client.admin.command('ping')
+        db_status = await client.admin.command('ping')
         current_time = datetime.now(IST)
         
-        # Get collection counts
-        users_count = db.users.count_documents({})
-        tiffins_count = db.tiffins.count_documents({})
-        notices_count = db.notices.count_documents({})
-        polls_count = db.polls.count_documents({})
-        invoices_count = db.invoices.count_documents({})
-        notifications_count = db.notifications.count_documents({})
+        # Get collection counts in parallel
+        users_count, tiffins_count, notices_count, polls_count, invoices_count, notifications_count = await asyncio.gather(
+            db.users.count_documents({}),
+            db.tiffins.count_documents({}),
+            db.notices.count_documents({}),
+            db.polls.count_documents({}),
+            db.invoices.count_documents({}),
+            db.notifications.count_documents({})
+        )
         
         # Get database size info
-        db_stats = client.tiffintreats.command("dbStats")
+        db_stats = await client.tiffintreats.command("dbStats")
         
         stats = {
             "database_status": "healthy" if db_status else "unhealthy",
@@ -3498,34 +3700,37 @@ async def cleanup_old_data(
     try:
         cutoff_date = (datetime.now(IST) - timedelta(days=days))
         
-        # Clean up expired notices
-        notices_result = db.notices.delete_many({
-            "expires_at": {"$lt": cutoff_date}
-        })
-        
-        # Deactivate old polls
-        polls_result = db.polls.update_many(
-            {
-                "end_date": {"$lt": cutoff_date},
-                "active": True
-            },
-            {"$set": {"active": False}}
-        )
-        
-        # Archive old tiffin requests
-        requests_result = db.tiffin_requests.update_many(
-            {
+        # Execute cleanup operations in parallel for better performance
+        notices_result, polls_result, requests_result, notifications_result = await asyncio.gather(
+            # Clean up expired notices
+            db.notices.delete_many({
+                "expires_at": {"$lt": cutoff_date}
+            }),
+            
+            # Deactivate old polls
+            db.polls.update_many(
+                {
+                    "end_date": {"$lt": cutoff_date},
+                    "active": True
+                },
+                {"$set": {"active": False}}
+            ),
+            
+            # Archive old tiffin requests
+            db.tiffin_requests.update_many(
+                {
+                    "created_at": {"$lt": cutoff_date},
+                    "status": RequestStatus.PENDING
+                },
+                {"$set": {"status": RequestStatus.ARCHIVED}}
+            ),
+            
+            # Clean up old read notifications
+            db.notifications.delete_many({
                 "created_at": {"$lt": cutoff_date},
-                "status": RequestStatus.PENDING
-            },
-            {"$set": {"status": RequestStatus.ARCHIVED}}
+                "read": True
+            })
         )
-        
-        # Clean up old read notifications
-        notifications_result = db.notifications.delete_many({
-            "created_at": {"$lt": cutoff_date},
-            "read": True
-        })
         
         return {
             "status": "success",
@@ -3546,22 +3751,25 @@ async def cleanup_old_data(
 async def export_data(_: bool = Depends(verify_admin)):
     """Export all relevant data for backup"""
     try:
+        # Fetch all collections in parallel
+        users, tiffins, notices, polls, invoices, tiffin_requests = await asyncio.gather(
+            db.users.find({}, {"password": 0, "api_key": 0}).to_list(length=10000),
+            db.tiffins.find().to_list(length=10000),
+            db.notices.find().to_list(length=1000),
+            db.polls.find().to_list(length=1000),
+            db.invoices.find().to_list(length=10000),
+            db.tiffin_requests.find().to_list(length=10000)
+        )
+        
         export_data = {
-            "users": list(db.users.find({}, {"password": 0, "api_key": 0})),
-            "tiffins": list(db.tiffins.find()),
-            "notices": list(db.notices.find()),
-            "polls": list(db.polls.find()),
-            "invoices": list(db.invoices.find()),
-            "tiffin_requests": list(db.tiffin_requests.find()),
+            "users": [serialize_doc(user) for user in users],
+            "tiffins": [serialize_doc(tiffin) for tiffin in tiffins],
+            "notices": [serialize_doc(notice) for notice in notices],
+            "polls": [serialize_doc(poll) for poll in polls],
+            "invoices": [serialize_doc(invoice) for invoice in invoices],
+            "tiffin_requests": [serialize_doc(request) for request in tiffin_requests],
             "export_time": datetime.now(IST).isoformat()
         }
-        
-        # Convert ObjectIds to strings
-        for collection in export_data.values():
-            if isinstance(collection, list):
-                for doc in collection:
-                    if isinstance(doc, dict):
-                        doc = serialize_doc(doc)
         
         return export_data
     except Exception as e:
@@ -3580,8 +3788,10 @@ async def trigger_backup(_: bool = Depends(verify_admin)):
 async def list_backups(_: bool = Depends(verify_admin)):
     """List all available backups"""
     try:
-        mongo_backups = list(db.tt_backups.find({}, {"_id": 0, "backup_id": 1, "timestamp": 1, "metadata": 1})
-                            .sort("timestamp", -1))
+        mongo_backups = await db.tt_backups.find(
+            {}, 
+            {"_id": 0, "backup_id": 1, "timestamp": 1, "metadata": 1}
+        ).sort("timestamp", -1).to_list(length=100)
         
         local_backups = []
         for backup_file in BACKUP_DIR.glob("tiffintreats_backup_*.json"):
@@ -3637,7 +3847,7 @@ async def delete_backup(
 ):
     """Delete a specific backup"""
     try:
-        mongo_result = db.tt_backups.delete_one({"backup_id": backup_id})
+        mongo_result = await db.tt_backups.delete_one({"backup_id": backup_id})
         
         backup_file = BACKUP_DIR / f"tiffintreats_backup_{backup_id}.json"
         file_deleted = False
@@ -3667,80 +3877,86 @@ async def cleanup_old_data_task():
     try:
         thirty_days_ago = datetime.now(IST) - timedelta(days=30)
         
-        # Clean up expired notices
-        db.notices.delete_many({
-            "expires_at": {"$lt": thirty_days_ago}
-        })
-        
-        # Deactivate old polls
-        db.polls.update_many(
-            {
-                "end_date": {"$lt": thirty_days_ago},
-                "active": True
-            },
-            {"$set": {"active": False}}
-        )
-        
-        # Archive old tiffin requests
-        db.tiffin_requests.update_many(
-            {
+        # Execute cleanup operations in parallel
+        await asyncio.gather(
+            # Clean up expired notices
+            db.notices.delete_many({
+                "expires_at": {"$lt": thirty_days_ago}
+            }),
+            
+            # Deactivate old polls
+            db.polls.update_many(
+                {
+                    "end_date": {"$lt": thirty_days_ago},
+                    "active": True
+                },
+                {"$set": {"active": False}}
+            ),
+            
+            # Archive old tiffin requests
+            db.tiffin_requests.update_many(
+                {
+                    "created_at": {"$lt": thirty_days_ago},
+                    "status": "pending"
+                },
+                {"$set": {"status": "archived"}}
+            ),
+            
+            # Clean up old read notifications
+            db.notifications.delete_many({
                 "created_at": {"$lt": thirty_days_ago},
-                "status": "pending"
-            },
-            {"$set": {"status": "archived"}}
+                "read": True
+            })
         )
-        
-        # Clean up old read notifications
-        db.notifications.delete_many({
-            "created_at": {"$lt": thirty_days_ago},
-            "read": True
-        })
         
         print("Cleanup completed successfully")
     except Exception as e:
         print(f"Cleanup error: {str(e)}")
 
 # Database Indexes
-def setup_indexes():
+async def setup_indexes():
     """Setup necessary database indexes"""
     try:
-        # User indexes
-        db.users.create_index([("user_id", ASCENDING)], unique=True)
-        db.users.create_index([("email", ASCENDING)], unique=True)
-        db.users.create_index([("api_key", ASCENDING)], sparse=True)
-        db.users.create_index([("active", ASCENDING)])
-        
-        # Tiffin indexes
-        db.tiffins.create_index([("date", ASCENDING)])
-        db.tiffins.create_index([("assigned_users", ASCENDING)])
-        db.tiffins.create_index([("status", ASCENDING)])
-        db.tiffins.create_index([("date", ASCENDING), ("status", ASCENDING)])
-        db.tiffins.create_index([("date", ASCENDING), ("assigned_users", ASCENDING)])
-        
-        # Poll votes index
-        db.poll_votes.create_index(
-            [("poll_id", ASCENDING), ("user_id", ASCENDING)],
-            unique=True
+        # Execute index creation in parallel
+        await asyncio.gather(
+            # User indexes
+            db.users.create_index([("user_id", ASCENDING)], unique=True),
+            db.users.create_index([("email", ASCENDING)], unique=True),
+            db.users.create_index([("api_key", ASCENDING)], sparse=True),
+            db.users.create_index([("active", ASCENDING)]),
+            
+            # Tiffin indexes
+            db.tiffins.create_index([("date", ASCENDING)]),
+            db.tiffins.create_index([("assigned_users", ASCENDING)]),
+            db.tiffins.create_index([("status", ASCENDING)]),
+            db.tiffins.create_index([("date", ASCENDING), ("status", ASCENDING)]),
+            db.tiffins.create_index([("date", ASCENDING), ("assigned_users", ASCENDING)]),
+            
+            # Poll votes index
+            db.poll_votes.create_index(
+                [("poll_id", ASCENDING), ("user_id", ASCENDING)],
+                unique=True
+            ),
+            
+            # Notice index
+            db.notices.create_index([("expires_at", ASCENDING)]),
+            db.notices.create_index([("priority", ASCENDING)]),
+            
+            # Invoice index
+            db.invoices.create_index([("user_id", ASCENDING)]),
+            db.invoices.create_index([("paid", ASCENDING)]),
+            db.invoices.create_index([("start_date", ASCENDING), ("end_date", ASCENDING)]),
+            
+            # Notification index
+            db.notifications.create_index([("user_id", ASCENDING)]),
+            db.notifications.create_index([("user_id", ASCENDING), ("read", ASCENDING)]),
+            db.notifications.create_index([("created_at", ASCENDING)]),
+            
+            # Tiffin request index
+            db.tiffin_requests.create_index([("user_id", ASCENDING)]),
+            db.tiffin_requests.create_index([("status", ASCENDING)]),
+            db.tiffin_requests.create_index([("created_at", ASCENDING)])
         )
-        
-        # Notice index
-        db.notices.create_index([("expires_at", ASCENDING)])
-        db.notices.create_index([("priority", ASCENDING)])
-        
-        # Invoice index
-        db.invoices.create_index([("user_id", ASCENDING)])
-        db.invoices.create_index([("paid", ASCENDING)])
-        db.invoices.create_index([("start_date", ASCENDING), ("end_date", ASCENDING)])
-        
-        # Notification index
-        db.notifications.create_index([("user_id", ASCENDING)])
-        db.notifications.create_index([("user_id", ASCENDING), ("read", ASCENDING)])
-        db.notifications.create_index([("created_at", ASCENDING)])
-        
-        # Tiffin request index
-        db.tiffin_requests.create_index([("user_id", ASCENDING)])
-        db.tiffin_requests.create_index([("status", ASCENDING)])
-        db.tiffin_requests.create_index([("created_at", ASCENDING)])
         
         print("Database indexes setup completed")
     except Exception as e:
@@ -3754,7 +3970,7 @@ scheduler = AsyncIOScheduler()
 async def startup_event():
     """Initialize application on startup"""
     try:
-        setup_indexes()
+        await setup_indexes()
         
         asyncio.create_task(cleanup_old_data_task()) 
         asyncio.create_task(keep_alive())
@@ -3776,8 +3992,8 @@ async def shutdown_event():
     """Cleanup on application shutdown"""
     try:
         scheduler.shutdown()
-        
-        client.close()
+        await http_client.aclose()
+        await client.close()
         print("Application shutdown completed successfully")
     except Exception as e:
         print(f"Shutdown error: {str(e)}")
